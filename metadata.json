@@ -1,0 +1,5 @@
+{
+  "name": "NanoBanana Storyboarder",
+  "description": "A professional AI tool that converts novel text into comic storyboard scripts and generates scene visualizations using Gemini models.",
+  "requestFramePermissions": []
+}
