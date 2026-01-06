@@ -10,20 +10,20 @@ export default defineConfig(({ mode }) => {
         host: '0.0.0.0',
         proxy: {
           '/api/t8star': {
-            target: 'https://ai.t8star.cn',
+            target: 'http://localhost:3002',
             changeOrigin: true,
             secure: false,
             timeout: 300000, // 5 minutes
             proxyTimeout: 300000, // 5 minutes
-            rewrite: (path) => path.replace(/^\/api\/t8star/, '')
+            // rewrite: (path) => path.replace(/^\/api\/t8star/, '') // Don't rewrite, let backend handle it
           },
           '/api/polo': {
-            target: 'https://work.poloapi.com',
+            target: 'http://localhost:3002',
             changeOrigin: true,
             secure: false,
             timeout: 300000, // 5 minutes
             proxyTimeout: 300000, // 5 minutes
-            rewrite: (path) => path.replace(/^\/api\/polo/, '')
+            // rewrite: (path) => path.replace(/^\/api\/polo/, '') // Don't rewrite, let backend handle it
           }
         }
       },

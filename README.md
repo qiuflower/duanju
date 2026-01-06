@@ -22,13 +22,19 @@ An AI-powered tool for converting novel text into visual storyboards and video c
 
 1. Clone the repository or download the source code.
 
-2. Install dependencies:
+2. Install dependencies (Root and Server):
    ```bash
+   # Install root dependencies
    npm install
+
+   # Install server dependencies
+   cd server
+   npm install
+   cd ..
    ```
 
 3. Configure Environment Variables:
-   Create a `.env.local` file in the root directory and add your API keys:
+   Create a `.env` file in the root directory (or `.env.local`) and add your API keys:
    ```env
    TEXT_API_KEY=your_gemini_text_api_key
    IMAGE_API_KEY=your_gemini_image_api_key
@@ -38,22 +44,46 @@ An AI-powered tool for converting novel text into visual storyboards and video c
 
 ## Usage
 
-1. Start the development server:
+### Development Mode
+
+To run the application in development mode, you need to start both the backend server and the frontend development server.
+
+1. **Start the Backend Server** (Required for API Proxy):
+   ```bash
+   npm run server
+   ```
+   *The server will start on port 3002.*
+
+2. **Start the Frontend Development Server** (In a new terminal):
    ```bash
    npm run dev
    ```
+   *The frontend will start on http://localhost:3000 (or the port shown in your terminal).*
 
-2. Open your browser and navigate to the local URL provided (usually `http://localhost:5173`).
+### Production Mode
 
-3. **Start Creating**:
-   - **Load Novel**: Paste your novel text into the input area.
-   - **Configure Style**: Choose a director style, reference work, or visual texture from the settings panel.
-   - **Analyze**: Let the AI break down the text into chunks.
-   - **Generate**: Use manual controls to step through extraction and generation, or enable "Auto Mode" for automated processing.
+To build and run the application for production:
+
+1. **Build the Frontend**:
+   ```bash
+   npm run build
+   ```
+
+2. **Start the Application**:
+   ```bash
+   npm run start
+   ```
+   *This command starts the backend server, which will also serve the built frontend files at http://localhost:3002.*
+
+## Project Structure
+
+- **`/` (Root)**: Frontend React application (Vite).
+- **`/server`**: Backend Node.js/Express server. Handles API proxying and static file serving.
 
 ## Tech Stack
 
 - **Frontend**: React 19, TypeScript, Vite
+- **Backend**: Node.js, Express (Proxy Server)
 - **AI Integration**: Google GenAI SDK (`@google/genai`)
 - **Icons**: Lucide React
 - **State Management**: React Hooks & Local Storage
