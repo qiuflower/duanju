@@ -88,3 +88,26 @@ export interface NovelChunk {
   assets: Asset[];
   scenes: Scene[];
 }
+
+export type ContentPart = {
+  text?: string;
+  inlineData?: { mimeType: string; data: string };
+  fileData?: { mimeType: string; fileUri: string };
+};
+
+export type GenerateContentResponse = {
+  text?: string;
+  candidates?: Array<{
+    content?: {
+      parts?: ContentPart[];
+    };
+  }>;
+};
+
+export type VideosOperation = {
+  done: boolean;
+  operation?: { id?: string; status?: string };
+  response?: { generatedVideos?: Array<{ video?: { uri?: string } }> };
+  error?: any;
+};
+
