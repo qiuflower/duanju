@@ -2,13 +2,13 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Scene, ImageGenStatus, GlobalStyle, Asset } from '../types';
 import { generateSceneImage, generateSpeech, pcmToWav, generateVideo } from '../services/gemini';
 import { Translation } from '../translations';
-import { Image as ImageIcon, Copy, Aperture, RefreshCw, Download, MessageSquare, Music, Video, Clock, Camera, Zap, Volume2, Mic, Film } from 'lucide-react';
+import { Image as ImageIcon, Copy, Aperture, RefreshCw, Download, MessageSquare, Music, Video, Clock, Camera, Zap, Volume2, Mic, Film, Upload, Plus, Trash2 } from 'lucide-react';
 
 interface SceneCardProps {
   scene: Scene;
   characterDesc: string;
   labels: Translation;
-  onUpdate: (id: string, field: keyof Scene, value: string) => void;
+  onUpdate: (id: string, field: keyof Scene, value: any) => void;
   isGeneratingExternal?: boolean; 
   onGenerateImageOverride?: (scene: Scene) => Promise<string>;
   onImageGenerated?: (id: string, url: string) => void;
@@ -38,6 +38,35 @@ const SceneCard: React.FC<SceneCardProps> = ({
   const [audioUrl, setAudioUrl] = useState<string | null>(scene.narrationAudioUrl || null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const isGeneratingRef = useRef(false);
+  
+  const [useAssets, setUseAssets] = useState(scene.useAssets ?? true);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Sync prop change
+  useEffect(() => {
+    if (scene.useAssets !== undefined) {
+      setUseAssets(scene.useAssets);
+    }
+  }, [scene.useAssets]);
+
+  const handleUploadClick = () => {
+    fileInputRef.current?.click();
+  };
+
+  const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const result = e.target?.result as string;
+        if (result) {
+          onUpdate(scene.id, 'imageUrl', result);
+          setGenStatus(ImageGenStatus.COMPLETED);
+        }
+      };
+      reader.readAsDataURL(file);
+    }
+  };
 
   // Sync prop image/video url with local status
   useEffect(() => {
@@ -81,7 +110,7 @@ const SceneCard: React.FC<SceneCardProps> = ({
     if (!scene.imageUrl) return; // Need image first
     setVideoStatus(ImageGenStatus.GENERATING);
     try {
-      const url = await generateVideo(scene.imageUrl, scene, globalStyle.aspectRatio, assets);
+      const url = await generateVideo(scene.imageUrl, scene, globalStyle.aspectRatio, useAssets ? assets : []);
       setVideoStatus(ImageGenStatus.COMPLETED);
       if (onVideoGenerated) {
           onVideoGenerated(scene.id, url);
@@ -189,6 +218,13 @@ const SceneCard: React.FC<SceneCardProps> = ({
 
   return (
     <div className="bg-dark-800 rounded-xl border border-white/10 overflow-hidden shadow-lg hover:border-banana-500/30 transition-colors duration-300">
+      <input
+        type="file"
+        ref={fileInputRef}
+        onChange={handleFileChange}
+        accept="image/*"
+        className="hidden"
+      />
       <div className="flex flex-col md:flex-row">
         
         {/* LEFT COLUMN: VISUAL / IMAGE / VIDEO */}
@@ -233,6 +269,15 @@ const SceneCard: React.FC<SceneCardProps> = ({
 
               {/* Toolbar Overlay */}
                <div className="absolute top-2 right-2 flex flex-col gap-2 z-10">
+                   {/* Upload Button */}
+                   <button 
+                        onClick={handleUploadClick} 
+                        className="p-2 bg-black/60 text-white rounded-full hover:bg-banana-500 hover:text-black transition-colors opacity-0 group-hover:opacity-100" 
+                        title={labels.uploadImage || "Upload Image"}
+                    >
+                     <Upload className="w-4 h-4" />
+                   </button>
+
                    {/* Regenerate Button (Image or Video) */}
                    <button 
                         onClick={handleRefresh} 
@@ -353,10 +398,27 @@ const SceneCard: React.FC<SceneCardProps> = ({
                 
                 {/* 1. Video Specs & Prompt */}
                 <div className="p-4 flex flex-col gap-3">
-                     <h4 className="text-[10px] uppercase tracking-widest text-blue-400 font-bold flex items-center gap-2">
-                         <Video className="w-3 h-3" />
-                         {labels.videoPromptLabel}
-                     </h4>
+                     <div className="flex justify-between items-center">
+                         <h4 className="text-[10px] uppercase tracking-widest text-blue-400 font-bold flex items-center gap-2">
+                             <Video className="w-3 h-3" />
+                             {labels.videoPromptLabel}
+                         </h4>
+                         <div className="flex items-center gap-2">
+                             <input 
+                                type="checkbox" 
+                                id={`useAssets-${scene.id}`}
+                                checked={useAssets} 
+                                onChange={(e) => {
+                                setUseAssets(e.target.checked);
+                                onUpdate(scene.id, 'useAssets', e.target.checked);
+                            }}
+                                className="w-3 h-3 rounded border-gray-600 text-banana-500 focus:ring-banana-500/50 bg-gray-700"
+                             />
+                             <label htmlFor={`useAssets-${scene.id}`} className="text-[10px] text-gray-400 cursor-pointer select-none">
+                                 Use Assets
+                             </label>
+                         </div>
+                     </div>
                      
                      {/* Video Params Grid */}
                      <div className="grid grid-cols-2 gap-2 text-[10px] font-mono mb-2">
@@ -411,30 +473,82 @@ const SceneCard: React.FC<SceneCardProps> = ({
                         <MessageSquare className="w-3.5 h-3.5 text-green-400" />
                         <h4 className="text-xs font-bold text-gray-300">{labels.dialogueLabel}</h4>
                      </div>
+                     <button 
+                        onClick={() => {
+                            const newDialogue = [...(scene.audio_dialogue || []), { speaker: 'Role', text: 'Content...' }];
+                            onUpdate(scene.id, 'audio_dialogue', newDialogue);
+                        }}
+                        className="p-1 hover:bg-white/10 rounded text-gray-500 hover:text-green-400 transition-colors"
+                        title="Add Dialogue Line"
+                     >
+                        <Plus className="w-3.5 h-3.5" />
+                     </button>
                  </div>
                  
-                 {/* Dialogue List - Display Only for Context */}
+                 {/* Dialogue List - Editable */}
                  <div className="space-y-1 mb-2">
                     {scene.audio_dialogue && scene.audio_dialogue.length > 0 ? (
                         scene.audio_dialogue.map((line, idx) => (
-                            <div key={idx} className="flex gap-2 text-xs">
-                                <span className="font-bold text-banana-500 shrink-0">{line.speaker}:</span>
-                                <span className="text-gray-400">{line.text}</span>
+                            <div key={idx} className="flex gap-2 text-xs items-center group/line">
+                                <input 
+                                    className="font-bold text-banana-500 bg-transparent border-none outline-none w-24 text-right focus:bg-white/5 rounded px-1"
+                                    value={line.speaker}
+                                    onChange={(e) => {
+                                        const newDialogue = [...(scene.audio_dialogue || [])];
+                                        newDialogue[idx] = { ...newDialogue[idx], speaker: e.target.value };
+                                        onUpdate(scene.id, 'audio_dialogue', newDialogue);
+                                    }}
+                                />
+                                <span className="text-gray-500">:</span>
+                                <input 
+                                    className="text-gray-400 bg-transparent border-none outline-none flex-1 focus:bg-white/5 rounded px-1"
+                                    value={line.text}
+                                    onChange={(e) => {
+                                        const newDialogue = [...(scene.audio_dialogue || [])];
+                                        newDialogue[idx] = { ...newDialogue[idx], text: e.target.value };
+                                        onUpdate(scene.id, 'audio_dialogue', newDialogue);
+                                    }}
+                                />
+                                <button 
+                                    onClick={() => {
+                                        const newDialogue = [...(scene.audio_dialogue || [])];
+                                        newDialogue.splice(idx, 1);
+                                        onUpdate(scene.id, 'audio_dialogue', newDialogue);
+                                    }} 
+                                    className="opacity-0 group-hover/line:opacity-100 text-red-500/50 hover:text-red-500 transition-opacity p-1"
+                                >
+                                    <Trash2 className="w-3 h-3" />
+                                </button>
                             </div>
                         ))
                     ) : (
-                        <div className="text-[10px] text-gray-600 italic">No dialogue detected.</div>
+                        <div className="text-[10px] text-gray-600 italic pl-2">No dialogue. Click + to add.</div>
                     )}
                  </div>
 
                  {/* SFX / BGM */}
-                 {(scene.audio_sfx || scene.audio_bgm) && (
-                     <div className="flex items-center gap-2 text-[10px] text-gray-500 border-t border-white/5 pt-2 mt-2">
-                         <Music className="w-3 h-3 text-gray-600" />
-                         <span>{labels.sfxLabel}: </span>
-                         <span className="text-gray-400">{scene.audio_sfx} {scene.audio_bgm ? ` / ${scene.audio_bgm}` : ''}</span>
+                 <div className="flex flex-col gap-2 text-[10px] text-gray-500 border-t border-white/5 pt-2 mt-2">
+                     <div className="flex items-center gap-2 group/sfx">
+                         <Music className="w-3 h-3 text-gray-600 group-focus-within/sfx:text-banana-500" />
+                         <span className="w-8 shrink-0">{labels.sfxLabel}:</span>
+                         <input 
+                            value={scene.audio_sfx || ''} 
+                            onChange={(e) => onUpdate(scene.id, 'audio_sfx', e.target.value)}
+                            className="bg-transparent border-b border-transparent hover:border-white/10 focus:border-banana-500 outline-none flex-1 text-gray-400 transition-colors px-1"
+                            placeholder="Sound Effects..."
+                          />
                      </div>
-                 )}
+                     <div className="flex items-center gap-2 group/bgm">
+                         <Music className="w-3 h-3 text-gray-600 opacity-50 group-focus-within/bgm:text-banana-500 group-focus-within/bgm:opacity-100" />
+                         <span className="w-8 shrink-0">BGM:</span>
+                         <input 
+                            value={scene.audio_bgm || ''} 
+                            onChange={(e) => onUpdate(scene.id, 'audio_bgm', e.target.value)}
+                            className="bg-transparent border-b border-transparent hover:border-white/10 focus:border-banana-500 outline-none flex-1 text-gray-400 transition-colors px-1"
+                            placeholder="Background Music..."
+                          />
+                     </div>
+                 </div>
             </div>
         </div>
       </div>

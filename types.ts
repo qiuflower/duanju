@@ -28,6 +28,7 @@ export interface Scene {
   narrationAudioUrl?: string; // New: Generated Narration Audio URL (Blob URL)
   
   assetIds?: string[]; // IDs of assets appearing in this scene
+  useAssets?: boolean; // Whether to use assets for video generation
 }
 
 export interface GeneratedImage {

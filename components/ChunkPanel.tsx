@@ -144,7 +144,7 @@ const ChunkPanel: React.FC<ChunkPanelProps> = ({
           let lastError;
           for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
               try {
-                  const videoUrl = await generateVideo(scene.imageUrl, scene, styleState.aspectRatio, chunk.assets);
+                  const videoUrl = await generateVideo(scene.imageUrl, scene, styleState.aspectRatio, (scene.useAssets !== false) ? chunk.assets : []);
                   onSceneUpdate(chunk.id, scene.id, { videoUrl });
                   return; // Success
               } catch (e) {
