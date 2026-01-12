@@ -1239,6 +1239,9 @@ export const generateAssetImage = async (
     const textureStyle = style.texture.custom || (style.texture.selected !== 'None' ? style.texture.selected : 'Realistic');
     const visualDna = style.visualTags || "";
     
+    // Check if visualDna follows the standard prefix format [Medium][Era][Color][Lighting][Texture]
+    const isStandardPrefix = visualDna.trim().startsWith("[") && visualDna.includes("]");
+
     // Strict Style Check
     const isRealistic = 
         textureStyle.toLowerCase().includes('real') || 
@@ -1249,7 +1252,25 @@ export const generateAssetImage = async (
         textureStyle.includes('摄影');
 
     const realismPrompt = isRealistic ? "photorealistic, 8k, raw photo, highly detailed, cinematic lighting" : "";
-    const stylePrefix = `((Art Style: ${workStyle})), ((Texture: ${textureStyle})), ((World Setting: ${workStyle}))`;
+    
+    // Construct the Unified Style Prefix
+    let stylePrefix = "";
+    if (isStandardPrefix) {
+        stylePrefix = visualDna;
+    } else {
+        // Fallback: Construct a best-effort prefix if analysis hasn't been run
+        // We map the available info to the slots: [Medium][Era][Color][Lighting][Texture]
+        // This is a rough approximation to ensure the format is followed even without AI analysis
+        const medium = workStyle || "Cinematic";
+        const era = "Modern"; // Generic fallback
+        const color = "Cinematic Color";
+        const lighting = "Volumetric Lighting";
+        const texture = textureStyle || "High Quality";
+        
+        // If we don't have analysis, we also keep the old keywords for safety
+        stylePrefix = `[${medium}][${era}][${color}][${lighting}][${texture}], ((Art Style: ${workStyle})), ((Texture: ${textureStyle}))`;
+    }
+
     
     // Strict Negative Prompts for Assets
     // Rule: No multi-panels, no split screens, no text, no effects on characters
@@ -1272,11 +1293,11 @@ export const generateAssetImage = async (
             const refInstruction = referenceImageUrl ? "Use the attached image as the primary reference for the character's appearance (face, hair, features)." : "";
 
             // Prompt for Split View (Face + Three Views)
-            prompt = `(Best quality, masterpiece), ${stylePrefix}, ${textureStyle} style, ${realismPrompt}.
+            prompt = `(Best quality, masterpiece), ${stylePrefix}.
             Widescreen Split Screen Composition (16:9 landscape, horizontal):
             [LEFT THIRD]: Extreme Close-up Portrait of ${asset.name}'s face. High definition, detailed eyes, looking directly at camera.
             [RIGHT TWO-THIRDS]: Full Body Character Sheet of ${asset.name}. Three distinct views: Front, Side, Back. Standing pose.
-            ${bgConstraint}, Subject: ${asset.description}, ${asset.visualDna || ""}, ${visualDna}. 
+            ${bgConstraint}, Subject: ${asset.description}. 
             ${userNotes ? `Additional constraints: ${userNotes}` : ""}
             ${refInstruction}
             NO TEXT. Exclude: ${negativePrompt}`;
@@ -1288,12 +1309,12 @@ export const generateAssetImage = async (
 
             const refInstruction = referenceImageUrl ? "Match the attached reference image's lighting direction and rendering style exactly." : "";
 
-            prompt = `(Best quality, masterpiece), ${stylePrefix}, ${textureStyle} style, ${realismPrompt}.
+            prompt = `(Best quality, masterpiece), ${stylePrefix}.
             Create a single flat layout image on a pure white background only. No scene, no room, no surfaces.
             Widescreen Split Screen Layout (16:9 landscape, horizontal):
             [LEFT AREA]: Item macro close-up in a perfect square (1:1). Emphasize material details and craftsmanship. Crisp silhouette with clear edge separation from background.
             [RIGHT AREA]: Three equal square views (1:1:1), aligned left-to-right: Front View, Side View, Top View. Orthographic views, no perspective distortion. Same scale, strict proportional correspondence, perfect alignment.
-            ${bgConstraint}. Subject: ${asset.name}. Description: ${asset.description}, ${asset.visualDna || ""}, ${visualDna}.
+            ${bgConstraint}. Subject: ${asset.name}. Description: ${asset.description}.
             ${userNotes ? `Additional constraints: ${userNotes}` : ""}
             Output PNG with alpha channel.
             NO SHADOWS. NO REFLECTIONS. NO TEXT.
@@ -1307,7 +1328,7 @@ export const generateAssetImage = async (
             // Reference instruction for location
             const refInstruction = referenceImageUrl ? "Use the attached image as the reference for the location's style and elements." : "";
 
-            prompt = `(Best quality, masterpiece), ${stylePrefix}, ${textureStyle} style, ${realismPrompt}, Establishing shot, Environment design, Scenery Only, Subject: ${asset.name}. Description: ${asset.description}, ${asset.visualDna || ""}, ${visualDna}. 
+            prompt = `(Best quality, masterpiece), ${stylePrefix}, Establishing shot, Environment design, Scenery Only, Subject: ${asset.name}. Description: ${asset.description}. 
             ${userNotes ? `Additional constraints: ${userNotes}` : ""}
             ${refInstruction}
             NO TEXT. Exclude: ${negativePrompt}`;
@@ -1458,11 +1479,24 @@ export const generateAssetImage = async (
 const AGENT_A_DNA_PROMPT = (workStyle: string, textureStyle: string, language: string) => `
 You are **Agent A1: The Visual Director**.
 Goal: Define a Global Visual DNA string based on the Style Reference: "${workStyle}" and Texture Reference: "${textureStyle}".
-**CRITICAL INSTRUCTION**: The output must describe the **Visual Style** (lighting, atmosphere, art style, film grain, color palette) ONLY.
-**FORBIDDEN**: Do NOT include any specific character names, plot events, actions, or story details from the provided text.
+
+**CRITICAL INSTRUCTION**: The output must be a standard style prefix string in the exact format:
+"[Art Medium][Era Style][Color Scheme][Lighting Features][Texture Details], "
+
+**REQUIREMENTS**:
+1. Analyze the input styles to extract these 5 core visual features.
+2. **Format**: Strictly use the brackets [] for each category.
+3. **Content**:
+   - [Art Medium]: e.g., [Digital Art], [Oil Painting], [Photography], [Anime]
+   - [Era Style]: e.g., [Cyberpunk], [Victorian], [Modern], [1990s]
+   - [Color Scheme]: e.g., [Neon & Dark], [Pastel], [High Contrast], [Desaturated]
+   - [Lighting Features]: e.g., [Volumetric Lighting], [Soft Studio Light], [Cinematic Lighting]
+   - [Texture Details]: e.g., [Octane Render], [Rough Sketch], [8k Photorealistic]
+4. **Language**: The content inside brackets MUST be in ${language}.
+5. **Forbidden**: Do NOT include any specific character names or story details.
+
 Output **strictly** a valid JSON object. No markdown.
-Language: ${language}.
-Example: { "visual_dna": "cinematic lighting, volumetric fog, 35mm film grain, cyberpunk neon, wet pavement" }
+Example: { "visual_dna": "[Digital Art][Cyberpunk][Neon & Dark][Volumetric Lighting][Octane Render], " }
 `;
 
 const AGENT_A_ASSET_PROMPT = (language: string, existingAssets: Asset[]) => {
@@ -1480,6 +1514,77 @@ Goal: List ALL characters/locations found in the text.
 **Response Format (JSON):**
 { "assets": [ { "id": "hero_base", "name": "Hero Name", "description": "Visual description...", "type": "character", "parentId": "optional_parent_id" } ] }
 `;
+};
+
+export const analyzeVisualStyleFromImages = async (
+    images: string[], 
+    language: string = 'Chinese'
+): Promise<string> => {
+    if (!images || images.length === 0) return "";
+
+    const parts: any[] = [];
+    images.forEach(img => {
+        // Extract MIME type if present, otherwise default to image/png
+        const match = img.match(/^data:(image\/[a-zA-Z]+);base64,(.+)$/);
+        if (match) {
+             parts.push({
+                inlineData: {
+                    mimeType: match[1],
+                    data: match[2]
+                }
+            });
+        } else {
+            // Assume raw base64 is png if no header (fallback)
+             parts.push({
+                inlineData: {
+                    mimeType: "image/png",
+                    data: img
+                }
+            });
+        }
+    });
+
+    parts.push({ text: "Analyze the common visual style of these images." });
+
+    const prompt = `
+You are **Agent A1: The Visual Director**.
+Goal: Define a Global Visual DNA string based on the provided reference images.
+
+**CRITICAL INSTRUCTION**: The output must be a standard style prefix string in the exact format:
+"[Art Medium][Era Style][Color Scheme][Lighting Features][Texture Details], "
+
+**REQUIREMENTS**:
+1. Analyze the uploaded images to extract the common core visual features.
+2. **Format**: Strictly use the brackets [] for each category.
+3. **Content**:
+   - [Art Medium]: e.g., [Digital Art], [Oil Painting], [Photography], [Anime]
+   - [Era Style]: e.g., [Cyberpunk], [Victorian], [Modern], [1990s]
+   - [Color Scheme]: e.g., [Neon & Dark], [Pastel], [High Contrast], [Desaturated]
+   - [Lighting Features]: e.g., [Volumetric Lighting], [Soft Studio Light], [Cinematic Lighting]
+   - [Texture Details]: e.g., [Octane Render], [Rough Sketch], [8k Photorealistic]
+4. **Language**: The content inside brackets MUST be in ${language}.
+5. **Forbidden**: Do NOT include any specific character names or story details.
+
+Output **strictly** a valid JSON object. No markdown.
+Example: { "visual_dna": "[Digital Art][Cyberpunk][Neon & Dark][Volumetric Lighting][Octane Render], " }
+`;
+
+    try {
+        const response = await retryWithBackoff<GenerateContentResponse>(() => ai.models.generateContent({
+            model: 'gemini-3-flash-preview',
+            contents: { parts },
+            config: {
+                systemInstruction: prompt,
+                responseMimeType: "application/json",
+                responseSchema: { type: Type.OBJECT, properties: { visual_dna: { type: Type.STRING } } }
+            }
+        }));
+        const json = safeJsonParse<{visual_dna: string}>(response.text, { visual_dna: "" });
+        return json.visual_dna;
+    } catch (e) {
+        console.error("Visual DNA from Images failed:", e);
+        return "";
+    }
 };
 
 export const extractAssets = async (
@@ -1628,6 +1733,58 @@ ${assetMap}
 `;
 };
 
+export const regenerateScenePrompt = async (
+    scene: Scene,
+    assets: Asset[],
+    style: GlobalStyle,
+    language: string = 'Chinese'
+): Promise<string> => {
+    const activeAssets = assets.filter(a => scene.assetIds?.includes(a.id));
+    
+    const assetContext = activeAssets.map(a => 
+        `Asset "${a.name}" (${a.type}): ${a.description}. Visual DNA: ${a.visualDna || ''}`
+    ).join('\n');
+
+    // Extract Style Prefix
+    const visualDna = style.visualTags || "";
+    const isStandardPrefix = visualDna.trim().startsWith("[") && visualDna.includes("]");
+    // Use standard prefix if available, otherwise fallback to director/style name
+    const stylePrefix = isStandardPrefix ? visualDna : `(Best quality, masterpiece, ${style.director?.selected || 'Cinematic'})`;
+
+    const sysPrompt = `
+    You are an AI Visual Prompt Engineer.
+    Goal: Rewrite the Image Generation Prompt for a storyboard scene.
+    
+    Current Scene Visual Description: "${scene.visual_desc}"
+    
+    Selected Assets to Include (CRITICAL: You must explicitly describe these characters/items in the scene):
+    ${assetContext}
+    
+    Global Style Prefix: ${stylePrefix}
+    
+    Instructions:
+    1. Output ONLY the new prompt text. No explanations.
+    2. The prompt should be comma-separated, high quality, suitable for Stable Diffusion / Midjourney.
+    3. **MANDATORY**: Start the prompt with the Global Style Prefix exactly: "${stylePrefix}".
+    4. Integrate the asset descriptions naturally into the scene action.
+    5. Do NOT include negative prompts.
+    6. Language Requirement: The prompt MUST be written in ${language}.
+    `;
+    
+    try {
+        const response = await retryWithBackoff<GenerateContentResponse>(() => ai.models.generateContent({
+            model: 'gemini-3-flash-preview',
+            contents: { parts: [{ text: sysPrompt }] }
+        }));
+        
+        const text = response.text || response.candidates?.[0]?.content?.parts?.[0]?.text || "";
+        return text.trim();
+    } catch (e) {
+        console.error("Failed to regenerate prompt", e);
+        return scene.np_prompt;
+    }
+};
+
 export const analyzeNovelText = async (
     text: string, 
     language: string = 'Chinese', 
@@ -1692,12 +1849,17 @@ export const analyzeNovelText = async (
     const textureStyle = style.texture.custom || (style.texture.selected !== 'None' ? style.texture.selected : '');
     
     // Construct style prefix using Global Visual DNA if available, otherwise fallback to basic style selection
-    // Format: (Style: [Name], [Features])
+    // Format: [Standard Prefix] OR (Style: [Name], [Features])
     let stylePrefix = "";
     let generatedDna = "";
 
     // Helper to build prefix consistent with or without workStyle
     const buildPrefix = (visuals: string) => {
+        // Standard Prefix Check: If it matches [Medium][Era]... return as is
+        if (visuals && visuals.trim().startsWith("[") && visuals.includes("]")) {
+            return visuals;
+        }
+
         const parts = [];
         // ALWAYS include workStyle if selected, even if visualTags are present
         if (workStyle) parts.push(`Style: ${workStyle}`);
@@ -1719,8 +1881,16 @@ export const analyzeNovelText = async (
     }
 
     try {
-        // ALWAYS regenerate DNA to ensure it matches the current style selection and excludes previous story details
-        if (workStyle || textureStyle) {
+        // Check if we already have a valid Standard Style Prefix
+        // If so, reuse it to ensure consistency across chapters/batches
+        const currentDna = style.visualTags || "";
+        const isStandard = currentDna.trim().startsWith("[") && currentDna.includes("]");
+
+        if (isStandard && (workStyle || textureStyle)) {
+             generatedDna = currentDna;
+             console.log("[Gemini] Reusing existing Visual DNA:", generatedDna);
+        } else if (workStyle || textureStyle) {
+             // Only regenerate if missing or non-standard
              // 1. First check if workStyle itself can be the DNA (if it's detailed enough)
              // or if we need to expand it. For consistency, if no visualTags, we try to generate once.
              

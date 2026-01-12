@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Scene, ImageGenStatus, GlobalStyle, Asset } from '../types';
-import { generateSceneImage, generateSpeech, pcmToWav, generateVideo } from '../services/gemini';
+import { generateSceneImage, generateSpeech, pcmToWav, generateVideo, regenerateScenePrompt } from '../services/gemini';
 import { Translation } from '../translations';
-import { Image as ImageIcon, Copy, Aperture, RefreshCw, Download, MessageSquare, Music, Video, Clock, Camera, Zap, Volume2, Mic, Film, Upload, Plus, Trash2 } from 'lucide-react';
+import { AssetSelector } from './AssetSelector';
+import { Image as ImageIcon, Copy, Aperture, RefreshCw, Download, MessageSquare, Music, Video, Clock, Camera, Zap, Volume2, Mic, Film, Upload, Plus, Trash2, Link as LinkIcon, X } from 'lucide-react';
 
 interface SceneCardProps {
   scene: Scene;
@@ -16,6 +17,8 @@ interface SceneCardProps {
   globalStyle: GlobalStyle;
   areAssetsReady?: boolean; // New Prop for workflow enforcement
   assets?: Asset[];
+  onAddAsset?: (asset: Asset) => void;
+  language?: string;
 }
 
 const SceneCard: React.FC<SceneCardProps> = ({ 
@@ -29,7 +32,9 @@ const SceneCard: React.FC<SceneCardProps> = ({
     onVideoGenerated,
     globalStyle,
     areAssetsReady = true,
-    assets = []
+    assets = [],
+    onAddAsset,
+    language = 'Chinese'
 }) => {
   const [genStatus, setGenStatus] = useState<ImageGenStatus>(ImageGenStatus.IDLE);
   const [videoStatus, setVideoStatus] = useState<ImageGenStatus>(ImageGenStatus.IDLE);
@@ -40,7 +45,40 @@ const SceneCard: React.FC<SceneCardProps> = ({
   const isGeneratingRef = useRef(false);
   
   const [useAssets, setUseAssets] = useState(scene.useAssets ?? true);
+  const [showAssetSelector, setShowAssetSelector] = useState(false);
+  const [promptGenLoading, setPromptGenLoading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const updatePromptWithAssets = async (newAssetIds: string[], overrideAssets?: Asset[]) => {
+      setPromptGenLoading(true);
+      // Update IDs immediately
+      onUpdate(scene.id, 'assetIds', newAssetIds);
+      
+      try {
+          // Create temp scene for API call
+          const tempScene = { ...scene, assetIds: newAssetIds };
+          const assetsToUse = overrideAssets || assets;
+          const newPrompt = await regenerateScenePrompt(tempScene, assetsToUse, globalStyle, language);
+          onUpdate(scene.id, 'np_prompt', newPrompt);
+      } catch (e) {
+          console.error("Prompt refresh failed", e);
+      } finally {
+          setPromptGenLoading(false);
+      }
+  };
+
+  const handleAddAsset = (assetId: string, newAsset?: Asset) => {
+    const currentIds = scene.assetIds || [];
+    if (!currentIds.includes(assetId)) {
+        updatePromptWithAssets([...currentIds, assetId], newAsset ? [...assets, newAsset] : undefined);
+    }
+    setShowAssetSelector(false);
+  };
+
+  const handleRemoveAsset = (assetId: string) => {
+      const currentIds = scene.assetIds || [];
+      updatePromptWithAssets(currentIds.filter(id => id !== assetId));
+  };
 
   // Sync prop change
   useEffect(() => {
@@ -458,10 +496,43 @@ const SceneCard: React.FC<SceneCardProps> = ({
                         <span className="flex items-center gap-2"><ImageIcon className="w-3 h-3" /> {labels.imagePromptLabel}</span>
                         <button onClick={() => navigator.clipboard.writeText(scene.np_prompt)} className="text-gray-500 hover:text-white transition-colors" title={labels.copy}><Copy className="w-3 h-3" /></button>
                      </h4>
+                     
+                     {/* Reference Image IDs List */}
+                     <div className="flex flex-wrap gap-2">
+                        {(scene.assetIds || []).length === 0 && (
+                            <span className="text-[10px] text-gray-600 italic py-0.5 self-center">No references</span>
+                        )}
+                        {(scene.assetIds || []).map(assetId => {
+                            const asset = assets.find(a => a.id === assetId);
+                            return (
+                                <div key={assetId} className="flex items-center gap-1 bg-purple-500/10 border border-purple-500/20 rounded px-1.5 py-0.5 text-[10px] text-purple-200 animate-fadeIn">
+                                    <LinkIcon className="w-2.5 h-2.5 opacity-70" />
+                                    <span className="max-w-[80px] truncate" title={asset?.name || assetId}>{asset?.name || assetId}</span>
+                                    <button 
+                                        onClick={() => handleRemoveAsset(assetId)}
+                                        className="hover:text-white ml-1 transition-colors"
+                                        title="Remove Reference"
+                                    >
+                                        <X className="w-2.5 h-2.5" /> 
+                                    </button>
+                                </div>
+                            );
+                        })}
+                        <button 
+                            onClick={() => setShowAssetSelector(true)}
+                            className="flex items-center gap-1 bg-white/5 hover:bg-white/10 border border-white/5 hover:border-white/20 rounded px-1.5 py-0.5 text-[10px] text-gray-400 hover:text-white transition-all"
+                            title="Add Reference Image"
+                        >
+                            <Plus className="w-2.5 h-2.5" />
+                            <span>Ref</span>
+                        </button>
+                     </div>
+
                      <textarea
                         value={scene.np_prompt}
                         onChange={(e) => onUpdate(scene.id, 'np_prompt', e.target.value)}
-                        className="flex-1 w-full bg-black/20 p-2 rounded border border-white/5 font-mono text-xs text-gray-400 resize-none outline-none focus:border-banana-500/30 min-h-[4rem]"
+                        className={`flex-1 w-full bg-black/20 p-2 rounded border border-white/5 font-mono text-xs text-gray-400 resize-none outline-none focus:border-banana-500/30 min-h-[4rem] transition-all ${promptGenLoading ? 'opacity-50 animate-pulse cursor-wait' : ''}`}
+                        disabled={promptGenLoading}
                      />
                 </div>
             </div>
@@ -552,6 +623,16 @@ const SceneCard: React.FC<SceneCardProps> = ({
             </div>
         </div>
       </div>
+      
+      {showAssetSelector && (
+          <AssetSelector 
+            assets={assets}
+            selectedIds={scene.assetIds || []}
+            onSelect={handleAddAsset}
+            onClose={() => setShowAssetSelector(false)}
+            onAssetCreated={onAddAsset}
+          />
+      )}
     </div>
   );
 };

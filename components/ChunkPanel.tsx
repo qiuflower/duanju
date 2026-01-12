@@ -44,6 +44,10 @@ const ChunkPanel: React.FC<ChunkPanelProps> = ({
   const [generatingSceneIds, setGeneratingSceneIds] = useState<string[]>([]);
   const [scriptError, setScriptError] = useState<string | null>(null);
 
+  const handleAddChunkAsset = (newAsset: Asset) => {
+      onUpdateChunk(chunk.id, { assets: [...chunk.assets, newAsset] });
+  };
+
   // Auto-Shoot mechanism
   React.useEffect(() => {
     if (autoShoot) {
@@ -382,6 +386,8 @@ const ChunkPanel: React.FC<ChunkPanelProps> = ({
                                 globalStyle={styleState}
                                 areAssetsReady={areAssetsReady}
                                 assets={chunk.assets}
+                                onAddAsset={handleAddChunkAsset}
+                                language={language}
                              />
                          ))}
                      </div>
