@@ -1761,14 +1761,16 @@ export const regenerateScenePrompt = async (
     ${assetContext}
     
     Global Style Prefix: ${stylePrefix}
+    Target Aspect Ratio: ${style.aspectRatio || "16:9"}
     
     Instructions:
     1. Output ONLY the new prompt text. No explanations.
     2. The prompt should be comma-separated, high quality, suitable for Stable Diffusion / Midjourney.
     3. **MANDATORY**: Start the prompt with the Global Style Prefix exactly: "${stylePrefix}".
     4. Integrate the asset descriptions naturally into the scene action.
-    5. Do NOT include negative prompts.
-    6. Language Requirement: The prompt MUST be written in ${language}.
+    5. Ensure the scene composition fits the target aspect ratio (${style.aspectRatio || "16:9"}).
+    6. Do NOT include negative prompts.
+    7. Language Requirement: The prompt MUST be written in ${language}.
     `;
     
     try {
@@ -2030,6 +2032,9 @@ export const generateSceneImage = async (
     if (isAncient) {
         negativePrompt += ", television, tv, phone, mobile, smartphone, computer, laptop, car, vehicle, modern building, skyscraper, electric light, modern clothing, suit, tie, jeans, plastic, electronic device";
     }
+
+    // Force Aspect Ratio in Prompt for models that ignore config
+    fullText = `${fullText}. --ar ${ar}`;
 
     fullText = `${fullText}. Exclude: ${negativePrompt}`;
     parts.push({ text: fullText });
