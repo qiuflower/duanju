@@ -32,7 +32,18 @@ export default defineConfig(({ mode }) => {
         'process.env.TEXT_API_KEY': JSON.stringify(env.TEXT_API_KEY),
         'process.env.IMAGE_API_KEY': JSON.stringify(env.IMAGE_API_KEY),
         'process.env.VIDEO_API_KEY': JSON.stringify(env.VIDEO_API_KEY),
-        'process.env.AUDIO_API_KEY': JSON.stringify(env.AUDIO_API_KEY)
+        'process.env.AUDIO_API_KEY': JSON.stringify(env.AUDIO_API_KEY),
+        
+        // Polo Keys
+        'process.env.POLO_TEXT_API_KEY': JSON.stringify(env.POLO_TEXT_API_KEY),
+        'process.env.POLO_IMAGE_API_KEY': JSON.stringify(env.POLO_IMAGE_API_KEY),
+        'process.env.POLO_VIDEO_API_KEY': JSON.stringify(env.POLO_VIDEO_API_KEY),
+
+        // T8Star Keys
+        'process.env.T8_TEXT_API_KEY': JSON.stringify(env.T8_TEXT_API_KEY),
+        'process.env.T8_IMAGE_API_KEY': JSON.stringify(env.T8_IMAGE_API_KEY),
+        'process.env.T8_VIDEO_API_KEY': JSON.stringify(env.T8_VIDEO_API_KEY),
+        'process.env.T8_AUDIO_API_KEY': JSON.stringify(env.T8_AUDIO_API_KEY)
       },
       resolve: {
         alias: {

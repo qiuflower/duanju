@@ -1,8 +1,8 @@
 import React, { useState, useRef } from 'react';
 import { GlobalStyle, StyleSetting } from '../types';
 import { Translation } from '../translations';
-import { Dices, Info, RectangleHorizontal, RectangleVertical, Mic, Volume2 } from 'lucide-react';
-import { generateStyleOptions, VOICE_OPTIONS, generateSpeech, pcmToWav } from '../services/gemini';
+import { Dices, Info, RectangleHorizontal, RectangleVertical, Mic, Volume2, Upload, X, Sparkles, Image as ImageIcon } from 'lucide-react';
+import { generateStyleOptions, VOICE_OPTIONS, generateSpeech, pcmToWav, analyzeVisualStyleFromImages } from '../services/gemini';
 
 interface StylePanelProps {
   styleState: GlobalStyle;
@@ -15,6 +15,60 @@ const StylePanel: React.FC<StylePanelProps> = ({ styleState, onStyleChange, labe
   const [loadingType, setLoadingType] = useState<string | null>(null);
   const [previewingVoice, setPreviewingVoice] = useState<string | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  
+  // Image Upload State
+  const [uploadImages, setUploadImages] = useState<string[]>([]);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+      const files = e.target.files;
+      if (!files) return;
+
+      const remainingSlots = 10 - uploadImages.length;
+      if (remainingSlots <= 0) return;
+
+      const filesToProcess = Array.from(files).slice(0, remainingSlots);
+      
+      filesToProcess.forEach((file: File) => {
+          const reader = new FileReader();
+          reader.onloadend = () => {
+              if (typeof reader.result === 'string') {
+                  setUploadImages(prev => [...prev, reader.result as string]);
+              }
+          };
+          reader.readAsDataURL(file);
+      });
+      
+      // Reset input
+      if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  const removeImage = (index: number) => {
+      setUploadImages(prev => prev.filter((_, i) => i !== index));
+  };
+
+  const handleAnalyzeImages = async () => {
+      if (uploadImages.length === 0) return;
+      setIsAnalyzing(true);
+      try {
+          const dna = await analyzeVisualStyleFromImages(uploadImages, language);
+          if (dna) {
+              onStyleChange({
+                  ...styleState,
+                  visualTags: dna, // Update Visual DNA
+                  texture: {
+                      ...styleState.texture,
+                      custom: dna // Also put it in custom texture field for visibility
+                  }
+              });
+          }
+      } catch (e) {
+          console.error("Analysis failed", e);
+      } finally {
+          setIsAnalyzing(false);
+      }
+  };
 
   const handleRollDice = async (type: 'director' | 'work' | 'texture') => {
     setLoadingType(type);
@@ -147,6 +201,7 @@ const StylePanel: React.FC<StylePanelProps> = ({ styleState, onStyleChange, labe
                         type="range" 
                         min="1" 
                         max="10" 
+                        step="1"
                         value={current.strength}
                         onChange={(e) => updateSetting(type, 'strength', parseInt(e.target.value))}
                         className="flex-1 accent-banana-500 h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer"
@@ -154,6 +209,59 @@ const StylePanel: React.FC<StylePanelProps> = ({ styleState, onStyleChange, labe
                     <span className="text-xs font-mono w-4 text-right">{current.strength}</span>
                 </div>
             </div>
+
+            {/* Image Upload for Texture */}
+            {type === 'texture' && (
+                <div className="mt-4 pt-4 border-t border-white/5">
+                    <div className="flex items-center justify-between mb-2">
+                        <span className="text-xs text-gray-400 font-medium flex items-center gap-1">
+                            <ImageIcon className="w-3 h-3" />
+                            Style Ref ({uploadImages.length}/10)
+                        </span>
+                        {uploadImages.length > 0 && (
+                            <button 
+                                onClick={handleAnalyzeImages}
+                                disabled={isAnalyzing}
+                                className="flex items-center gap-1 text-[10px] bg-banana-500 text-black px-2 py-1 rounded hover:bg-banana-400 transition-colors disabled:opacity-50"
+                            >
+                                {isAnalyzing ? <div className="w-3 h-3 border-2 border-black/30 border-t-black rounded-full animate-spin"/> : <Sparkles className="w-3 h-3" />}
+                                Analyze
+                            </button>
+                        )}
+                    </div>
+                    
+                    <div className="grid grid-cols-5 gap-2 mb-2">
+                        {uploadImages.map((img, idx) => (
+                            <div key={idx} className="relative aspect-square rounded overflow-hidden group border border-white/10">
+                                <img src={img} alt="ref" className="w-full h-full object-cover" />
+                                <button 
+                                    onClick={() => removeImage(idx)}
+                                    className="absolute top-0 right-0 p-0.5 bg-black/60 text-white opacity-0 group-hover:opacity-100 transition-opacity rounded-bl"
+                                >
+                                    <X className="w-3 h-3" />
+                                </button>
+                            </div>
+                        ))}
+                        {uploadImages.length < 10 && (
+                            <button 
+                                onClick={() => fileInputRef.current?.click()}
+                                className="aspect-square rounded border border-dashed border-white/20 flex items-center justify-center hover:border-banana-500/50 hover:bg-white/5 transition-colors"
+                                title="Upload Reference Image"
+                            >
+                                <Upload className="w-4 h-4 text-gray-500" />
+                            </button>
+                        )}
+                    </div>
+                    <input 
+                        type="file" 
+                        ref={fileInputRef} 
+                        className="hidden" 
+                        accept="image/*" 
+                        multiple 
+                        onChange={handleImageUpload} 
+                    />
+                </div>
+            )}
         </div>
     );
   };
