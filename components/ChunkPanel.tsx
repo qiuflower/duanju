@@ -5,7 +5,7 @@ import { ChevronDown, ChevronRight, Wand2, FileText, Video, Download, CheckCircl
 import SceneCard from './SceneCard';
 import JSZip from 'jszip';
 import saveAs from 'file-saver';
-import { generateVideo } from '../services/gemini';
+import { generateVideo, reviewVideoPrompt, regenerateVideoPromptOptimized } from '../services/gemini';
 
 interface ChunkPanelProps {
   chunk: NovelChunk;
@@ -92,6 +92,11 @@ const ChunkPanel: React.FC<ChunkPanelProps> = ({
     } finally {
         setLoadingStep('none');
     }
+  };
+
+  const handleDeleteScene = (sceneId: string) => {
+      const newScenes = chunk.scenes.filter(s => s.id !== sceneId);
+      onUpdateChunk(chunk.id, { scenes: newScenes });
   };
 
   const handleShoot = async () => {
@@ -184,7 +189,7 @@ const ChunkPanel: React.FC<ChunkPanelProps> = ({
       }
   };
 
-  const handleSceneUpdateWrapper = (sceneId: string, field: keyof Scene, value: string) => {
+  const handleSceneUpdateWrapper = (sceneId: string, field: keyof Scene, value: any) => {
       onSceneUpdate(chunk.id, sceneId, { [field]: value });
   };
 
@@ -379,6 +384,7 @@ const ChunkPanel: React.FC<ChunkPanelProps> = ({
                                 characterDesc=""
                                 labels={labels}
                                 onUpdate={handleSceneUpdateWrapper}
+                                onDelete={handleDeleteScene}
                                 isGeneratingExternal={generatingSceneIds.includes(scene.id)}
                                 onGenerateImageOverride={handleGenerateImageInternal}
                                 onImageGenerated={handleImageGenerated}
