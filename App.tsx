@@ -8,7 +8,7 @@ import ChunkPanel from './components/ChunkPanel';
 import ModelSelector from './components/ModelSelector';
 import { Film, AlertCircle, Globe, Video, Book, Trash2, PlayCircle, PauseCircle } from 'lucide-react';
 
-const CHUNK_SIZE = 120; 
+const CHUNK_SIZE = 5000; 
 const STATE_KEY = 'storyboarder_session';
 
 const DEFAULT_STYLES: Record<string, { directors: string[], works: string[], textures: string[] }> = {

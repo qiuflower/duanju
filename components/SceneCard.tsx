@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Scene, ImageGenStatus, GlobalStyle, Asset } from '../types';
-import { generateSceneImage, generateSpeech, pcmToWav, generateVideo, regenerateScenePrompt } from '../services/gemini';
+import { generateSceneImage, generateSpeech, pcmToWav, generateVideo, regenerateScenePrompt, matchAssetsToPrompt, updateVideoPromptDirectly } from '../services/gemini';
 import { Translation } from '../translations';
 import { AssetSelector } from './AssetSelector';
 import { Image as ImageIcon, Copy, Aperture, RefreshCw, Download, MessageSquare, Music, Video, Clock, Camera, Zap, Volume2, Mic, Film, Upload, Plus, Trash2, Link as LinkIcon, X } from 'lucide-react';
@@ -10,6 +10,7 @@ interface SceneCardProps {
   characterDesc: string;
   labels: Translation;
   onUpdate: (id: string, field: keyof Scene, value: any) => void;
+  onDelete?: (id: string) => void; // New prop for delete handler
   isGeneratingExternal?: boolean; 
   onGenerateImageOverride?: (scene: Scene) => Promise<string>;
   onImageGenerated?: (id: string, url: string) => void;
@@ -19,6 +20,7 @@ interface SceneCardProps {
   assets?: Asset[];
   onAddAsset?: (asset: Asset) => void;
   language?: string;
+  isOptimizing?: boolean; // New prop to show loading state from parent
 }
 
 const SceneCard: React.FC<SceneCardProps> = ({ 
@@ -26,6 +28,7 @@ const SceneCard: React.FC<SceneCardProps> = ({
     characterDesc, 
     labels, 
     onUpdate, 
+    onDelete,
     isGeneratingExternal = false,
     onGenerateImageOverride,
     onImageGenerated,
@@ -34,7 +37,8 @@ const SceneCard: React.FC<SceneCardProps> = ({
     areAssetsReady = true,
     assets = [],
     onAddAsset,
-    language = 'Chinese'
+    language = 'Chinese',
+    isOptimizing = false
 }) => {
   const [genStatus, setGenStatus] = useState<ImageGenStatus>(ImageGenStatus.IDLE);
   const [videoStatus, setVideoStatus] = useState<ImageGenStatus>(ImageGenStatus.IDLE);
@@ -42,12 +46,52 @@ const SceneCard: React.FC<SceneCardProps> = ({
   const [ttsLoading, setTtsLoading] = useState(false);
   const [audioUrl, setAudioUrl] = useState<string | null>(scene.narrationAudioUrl || null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
   const isGeneratingRef = useRef(false);
   
   const [useAssets, setUseAssets] = useState(scene.useAssets ?? true);
-  const [showAssetSelector, setShowAssetSelector] = useState(false);
+  const [activeAssetSelector, setActiveAssetSelector] = useState<'none' | 'image' | 'video'>('none');
   const [promptGenLoading, setPromptGenLoading] = useState(false);
+  const [videoPromptUpdating, setVideoPromptUpdating] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const updateVideoPromptWithAssets = async (newAssetIds: string[], overrideAssets?: Asset[]) => {
+      setVideoPromptUpdating(true);
+      try {
+          const tempScene = { ...scene, assetIds: newAssetIds };
+          let assetsToUse = overrideAssets || assets;
+
+          // Helper: Inject "Current Scene" asset if it's selected but not in the list
+          const currentSceneId = `scene_img_${scene.id}`;
+          if (newAssetIds.includes(currentSceneId)) {
+             // Check if it's already in assetsToUse
+             if (!assetsToUse.find(a => a.id === currentSceneId)) {
+                 const virtualSceneAsset: Asset = {
+                    id: currentSceneId,
+                    name: "Current Scene",
+                    description: "The current generated storyboard image for this scene.",
+                    type: "item",
+                    refImageUrl: scene.imageUrl
+                };
+                assetsToUse = [...assetsToUse, virtualSceneAsset];
+             }
+          }
+          
+          // Direct Update without Review
+          const optimized = await updateVideoPromptDirectly(tempScene, language, assetsToUse, globalStyle);
+          
+          onUpdate(scene.id, 'video_prompt', optimized.prompt);
+          if (optimized.specs.duration) onUpdate(scene.id, 'video_duration', optimized.specs.duration);
+          if (optimized.specs.camera) onUpdate(scene.id, 'video_camera', optimized.specs.camera);
+          if (optimized.specs.lens) onUpdate(scene.id, 'video_lens', optimized.specs.lens);
+          if (optimized.specs.vfx) onUpdate(scene.id, 'video_vfx', optimized.specs.vfx);
+          
+      } catch (e) {
+          console.error("Video prompt update failed", e);
+      } finally {
+          setVideoPromptUpdating(false);
+      }
+  };
 
   const updatePromptWithAssets = async (newAssetIds: string[], overrideAssets?: Asset[]) => {
       setPromptGenLoading(true);
@@ -67,17 +111,68 @@ const SceneCard: React.FC<SceneCardProps> = ({
       }
   };
 
-  const handleAddAsset = (assetId: string, newAsset?: Asset) => {
-    const currentIds = scene.assetIds || [];
-    if (!currentIds.includes(assetId)) {
-        updatePromptWithAssets([...currentIds, assetId], newAsset ? [...assets, newAsset] : undefined);
-    }
-    setShowAssetSelector(false);
+  const handleSpecChange = async (field: keyof Scene, value: string) => {
+      // 1. Update local state immediately
+      onUpdate(scene.id, field, value);
+
+      // 2. Trigger optimization (Direct Update)
+      try {
+          const tempScene = { ...scene, [field]: value };
+          
+          // Optimize prompt based on new spec directly
+          const optimized = await updateVideoPromptDirectly(tempScene, language, assets, globalStyle);
+          
+          onUpdate(scene.id, 'video_prompt', optimized.prompt);
+          
+          // Note: We don't overwrite the spec fields again with optimized.specs here 
+          // to avoid fighting with the user's input.
+          
+      } catch (e) {
+          console.error("Spec update optimization failed", e);
+      }
   };
 
-  const handleRemoveAsset = (assetId: string) => {
-      const currentIds = scene.assetIds || [];
-      updatePromptWithAssets(currentIds.filter(id => id !== assetId));
+  const handleAddAsset = (assetId: string, newAsset?: Asset) => {
+    // Determine which list to update based on active selector
+    if (activeAssetSelector === 'video') {
+        const currentVideoIds = scene.videoAssetIds || scene.assetIds?.slice(0, 3) || [];
+        
+        if (currentVideoIds.length >= 3) {
+            alert("Video storyboard supports a maximum of 3 reference assets.");
+            return;
+        }
+
+        if (!currentVideoIds.includes(assetId)) {
+            const newIds = [...currentVideoIds, assetId];
+            const assetsToUse = newAsset ? [...assets, newAsset] : assets;
+            
+            // Only update Video Prompt and Video Asset IDs
+            onUpdate(scene.id, 'videoAssetIds', newIds);
+            updateVideoPromptWithAssets(newIds, assetsToUse);
+        }
+    } else {
+        // Image Mode (Original Behavior)
+        const currentIds = scene.assetIds || [];
+        if (!currentIds.includes(assetId)) {
+            const newIds = [...currentIds, assetId];
+            const assetsToUse = newAsset ? [...assets, newAsset] : assets;
+            updatePromptWithAssets(newIds, assetsToUse);
+        }
+    }
+    setActiveAssetSelector('none');
+  };
+
+  const handleRemoveAsset = (assetId: string, mode: 'image' | 'video' = 'image') => {
+      if (mode === 'video') {
+          const currentVideoIds = scene.videoAssetIds || scene.assetIds?.slice(0, 3) || [];
+          const newIds = currentVideoIds.filter(id => id !== assetId);
+          onUpdate(scene.id, 'videoAssetIds', newIds);
+          updateVideoPromptWithAssets(newIds);
+      } else {
+          const currentIds = scene.assetIds || [];
+          const newIds = currentIds.filter(id => id !== assetId);
+          updatePromptWithAssets(newIds);
+      }
   };
 
   // Sync prop change
@@ -108,13 +203,66 @@ const SceneCard: React.FC<SceneCardProps> = ({
 
   // Sync prop image/video url with local status
   useEffect(() => {
-      if (scene.imageUrl) setGenStatus(ImageGenStatus.COMPLETED);
+      if (scene.imageUrl) {
+          setGenStatus(ImageGenStatus.COMPLETED);
+          
+          // --- Auto-Populate Video Assets Logic ---
+          // When image is generated (and wasn't there before, or we are initializing),
+          // if videoAssetIds is undefined, we populate it with Smart Logic:
+          // 1. Current Scene Image (ID: scene_img_${scene.id})
+          // 2. Top 2 Matched Assets from scene.assetIds
+          
+          if (scene.videoAssetIds === undefined) {
+              const currentSceneImgId = `scene_img_${scene.id}`;
+              
+              // 1. Get Top Matched Assets (exclude current scene image concept from this matching)
+              // We match against visual_desc using the assets present in assetIds
+              const availableAssets = assets.filter(a => (scene.assetIds || []).includes(a.id));
+              const matched = matchAssetsToPrompt(scene.visual_desc, availableAssets, scene.assetIds || []);
+              
+              // Take Top 2
+              const top2Ids = matched.slice(0, 2).map(a => a.id);
+              
+              // Combine: [SceneImage, ...Top2]
+              const initialVideoIds = [currentSceneImgId, ...top2Ids];
+              
+              // Update Scene State
+              onUpdate(scene.id, 'videoAssetIds', initialVideoIds);
+              
+              // Trigger Prompt Update (Optional, but good for consistency)
+              // We construct a temporary asset list including the virtual scene image asset
+              // REMOVED: User requested NO auto-update of prompt on initialization. Only on manual changes.
+              /*
+              const virtualSceneAsset: Asset = {
+                  id: currentSceneImgId,
+                  name: "Current Scene",
+                  description: "The current generated storyboard image.",
+                  type: "item",
+                  refImageUrl: scene.imageUrl
+              };
+              updateVideoPromptWithAssets(initialVideoIds, [...assets, virtualSceneAsset]);
+              */
+          }
+      }
+      
       if (scene.videoUrl) {
           setVideoStatus(ImageGenStatus.COMPLETED);
           setViewMode('video');
       }
       if (scene.narrationAudioUrl) setAudioUrl(scene.narrationAudioUrl);
   }, [scene.imageUrl, scene.videoUrl, scene.narrationAudioUrl]);
+
+  useEffect(() => {
+    if (viewMode !== 'video') return;
+    if (!scene.videoUrl) return;
+    const el = videoRef.current;
+    if (!el) return;
+    try {
+      el.pause();
+      el.load();
+      el.currentTime = 0;
+    } catch {}
+  }, [scene.videoUrl, viewMode]);
 
 
   const handleGenerateImage = async (force: boolean = false) => {
@@ -271,10 +419,13 @@ const SceneCard: React.FC<SceneCardProps> = ({
             <div className="relative w-full h-full flex items-center justify-center bg-black">
               {viewMode === 'video' && scene.videoUrl ? (
                   <video 
-                    src={scene.videoUrl} 
+                    key={scene.videoUrl}
+                    ref={videoRef}
                     controls 
                     className="max-w-full max-h-[320px] object-contain"
-                  />
+                  >
+                    <source src={scene.videoUrl} type="video/mp4" />
+                  </video>
               ) : (
                   <img 
                     src={scene.imageUrl} 
@@ -426,16 +577,26 @@ const SceneCard: React.FC<SceneCardProps> = ({
                                  </button>
                              )}
                          </div>
+                         {/* Delete Scene Button */}
+                         {onDelete && (
+                            <button 
+                                onClick={() => onDelete(scene.id)}
+                                className="p-1 hover:bg-red-500/20 text-gray-500 hover:text-red-500 rounded transition-colors ml-2"
+                                title="Delete Scene"
+                            >
+                                <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                         )}
                     </div>
                 </div>
                 <audio ref={audioRef} className="hidden" controls />
             </div>
 
-            {/* Middle: Split Prompts (Video & Image) */}
+            {/* Middle: Split Content (Video Left, Image/Dialogue Right) */}
             <div className="flex-1 grid grid-cols-1 lg:grid-cols-2 divide-y lg:divide-y-0 lg:divide-x divide-white/5">
                 
-                {/* 1. Video Specs & Prompt */}
-                <div className="p-4 flex flex-col gap-3">
+                {/* 1. LEFT PANE: VIDEO PROMPT (Expanded, Full Height) */}
+                <div className="p-3 flex flex-col gap-2 bg-black/10 h-full">
                      <div className="flex justify-between items-center">
                          <h4 className="text-[10px] uppercase tracking-widest text-blue-400 font-bold flex items-center gap-2">
                              <Video className="w-3 h-3" />
@@ -459,178 +620,294 @@ const SceneCard: React.FC<SceneCardProps> = ({
                      </div>
                      
                      {/* Video Params Grid */}
-                     <div className="grid grid-cols-2 gap-2 text-[10px] font-mono mb-2">
+                     <div className="grid grid-cols-2 gap-2 text-[10px] font-mono mb-1">
                         <div className="bg-blue-500/10 p-1.5 rounded flex items-center gap-2 text-blue-200">
                            <Clock className="w-3 h-3 text-blue-400"/> 
                            <span className="opacity-50">{labels.durationLabel}:</span>
-                           <input value={scene.video_duration || ''} onChange={e => onUpdate(scene.id, 'video_duration', e.target.value)} className="bg-transparent w-full outline-none" placeholder="3s" />
+                           <input 
+                                value={scene.video_duration || ''} 
+                                onChange={e => onUpdate(scene.id, 'video_duration', e.target.value)} 
+                                onBlur={e => handleSpecChange('video_duration', e.target.value)}
+                                onKeyDown={e => { if(e.key === 'Enter') { e.currentTarget.blur(); } }}
+                                className="bg-transparent w-full outline-none" 
+                                placeholder="3s" 
+                           />
                         </div>
                         <div className="bg-blue-500/10 p-1.5 rounded flex items-center gap-2 text-blue-200">
                            <Camera className="w-3 h-3 text-blue-400"/> 
                            <span className="opacity-50">{labels.lensLabel}:</span>
-                           <input value={scene.video_lens || ''} onChange={e => onUpdate(scene.id, 'video_lens', e.target.value)} className="bg-transparent w-full outline-none" placeholder="35mm" />
+                           <input 
+                                value={scene.video_lens || ''} 
+                                onChange={e => onUpdate(scene.id, 'video_lens', e.target.value)} 
+                                onBlur={e => handleSpecChange('video_lens', e.target.value)}
+                                onKeyDown={e => { if(e.key === 'Enter') { e.currentTarget.blur(); } }}
+                                className="bg-transparent w-full outline-none" 
+                                placeholder="35mm" 
+                           />
                         </div>
                         <div className="bg-blue-500/10 p-1.5 rounded flex items-center gap-2 text-blue-200">
                            <Video className="w-3 h-3 text-blue-400"/> 
                            <span className="opacity-50">{labels.cameraLabel}:</span>
-                           <input value={scene.video_camera || ''} onChange={e => onUpdate(scene.id, 'video_camera', e.target.value)} className="bg-transparent w-full outline-none" placeholder="Pan" />
+                           <input 
+                                value={scene.video_camera || ''} 
+                                onChange={e => onUpdate(scene.id, 'video_camera', e.target.value)} 
+                                onBlur={e => handleSpecChange('video_camera', e.target.value)}
+                                onKeyDown={e => { if(e.key === 'Enter') { e.currentTarget.blur(); } }}
+                                className="bg-transparent w-full outline-none" 
+                                placeholder="Pan" 
+                           />
                         </div>
                         <div className="bg-blue-500/10 p-1.5 rounded flex items-center gap-2 text-blue-200">
                            <Zap className="w-3 h-3 text-blue-400"/> 
                            <span className="opacity-50">{labels.vfxLabel}:</span>
-                           <input value={scene.video_vfx || ''} onChange={e => onUpdate(scene.id, 'video_vfx', e.target.value)} className="bg-transparent w-full outline-none" placeholder="-" />
+                           <input 
+                                value={scene.video_vfx || ''} 
+                                onChange={e => onUpdate(scene.id, 'video_vfx', e.target.value)} 
+                                onBlur={e => handleSpecChange('video_vfx', e.target.value)}
+                                onKeyDown={e => { if(e.key === 'Enter') { e.currentTarget.blur(); } }}
+                                className="bg-transparent w-full outline-none" 
+                                placeholder="-" 
+                           />
                         </div>
                      </div>
 
-                     <textarea 
-                        value={scene.visual_desc}
-                        onChange={(e) => onUpdate(scene.id, 'visual_desc', e.target.value)}
-                        className="flex-1 w-full bg-black/20 p-2 rounded border border-white/5 text-xs text-gray-300 resize-none outline-none focus:border-blue-500/30 min-h-[4rem]"
-                        placeholder={labels.visualDesc}
-                     />
-                </div>
-
-                {/* 2. Image Prompt */}
-                <div className="p-4 flex flex-col gap-3 relative group">
-                     <h4 className="text-[10px] uppercase tracking-widest text-purple-400 font-bold flex justify-between items-center">
-                        <span className="flex items-center gap-2"><ImageIcon className="w-3 h-3" /> {labels.imagePromptLabel}</span>
-                        <button onClick={() => navigator.clipboard.writeText(scene.np_prompt)} className="text-gray-500 hover:text-white transition-colors" title={labels.copy}><Copy className="w-3 h-3" /></button>
-                     </h4>
-                     
-                     {/* Reference Image IDs List */}
-                     <div className="flex flex-wrap gap-2">
-                        {(scene.assetIds || []).length === 0 && (
-                            <span className="text-[10px] text-gray-600 italic py-0.5 self-center">No references</span>
-                        )}
-                        {(scene.assetIds || []).map(assetId => {
-                            const asset = assets.find(a => a.id === assetId);
+                     {/* Reference Image IDs List (Video) */}
+                     {scene.imageUrl ? (
+                     <div className="flex flex-wrap gap-2 mb-1">
+                        {(() => {
+                            const displayIds = scene.videoAssetIds || [];
                             return (
-                                <div key={assetId} className="flex items-center gap-1 bg-purple-500/10 border border-purple-500/20 rounded px-1.5 py-0.5 text-[10px] text-purple-200 animate-fadeIn">
-                                    <LinkIcon className="w-2.5 h-2.5 opacity-70" />
-                                    <span className="max-w-[80px] truncate" title={asset?.name || assetId}>{asset?.name || assetId}</span>
+                                <>
+                                    {displayIds.length === 0 && (
+                                        <span className="text-[10px] text-gray-600 italic py-0.5 self-center">No references</span>
+                                    )}
+                                    {displayIds.map(assetId => {
+                                        if (assetId === `scene_img_${scene.id}`) {
+                                            return (
+                                                <div key={assetId} className="flex items-center gap-1 bg-green-500/10 border border-green-500/20 rounded px-1.5 py-0.5 text-[10px] text-green-200 animate-fadeIn">
+                                                    <ImageIcon className="w-2.5 h-2.5 opacity-70" />
+                                                    <span className="max-w-[80px] truncate" title="Current Scene">Current Scene</span>
+                                                    <button 
+                                                        onClick={() => handleRemoveAsset(assetId, 'video')}
+                                                        className="hover:text-white ml-1 transition-colors"
+                                                        title="Remove Reference"
+                                                    >
+                                                        <X className="w-2.5 h-2.5" /> 
+                                                    </button>
+                                                </div>
+                                            );
+                                        }
+
+                                        const asset = assets.find(a => a.id === assetId);
+                                        if (!asset) return null;
+
+                                        return (
+                                            <div key={assetId} className="flex items-center gap-1 bg-blue-500/10 border border-blue-500/20 rounded px-1.5 py-0.5 text-[10px] text-blue-200 animate-fadeIn">
+                                                <LinkIcon className="w-2.5 h-2.5 opacity-70" />
+                                                <span className="max-w-[80px] truncate" title={asset?.name || assetId}>{asset?.name || assetId}</span>
+                                                <button 
+                                                    onClick={() => handleRemoveAsset(assetId, 'video')}
+                                                    className="hover:text-white ml-1 transition-colors"
+                                                    title="Remove Reference"
+                                                >
+                                                    <X className="w-2.5 h-2.5" /> 
+                                                </button>
+                                            </div>
+                                        );
+                                    })}
                                     <button 
-                                        onClick={() => handleRemoveAsset(assetId)}
-                                        className="hover:text-white ml-1 transition-colors"
-                                        title="Remove Reference"
+                                        onClick={() => setActiveAssetSelector('video')}
+                                        className={`flex items-center gap-1 bg-white/5 hover:bg-white/10 border border-white/5 hover:border-white/20 rounded px-1.5 py-0.5 text-[10px] text-gray-400 hover:text-white transition-all ${(displayIds.length >= 3) ? 'opacity-50 cursor-not-allowed' : ''}`}
+                                        title={(displayIds.length >= 3) ? "Max 3 assets for video" : "Add Reference Image"}
+                                        disabled={displayIds.length >= 3}
                                     >
-                                        <X className="w-2.5 h-2.5" /> 
+                                        <Plus className="w-2.5 h-2.5" />
+                                        <span>Ref</span>
                                     </button>
-                                </div>
+                                </>
                             );
-                        })}
-                        <button 
-                            onClick={() => setShowAssetSelector(true)}
-                            className="flex items-center gap-1 bg-white/5 hover:bg-white/10 border border-white/5 hover:border-white/20 rounded px-1.5 py-0.5 text-[10px] text-gray-400 hover:text-white transition-all"
-                            title="Add Reference Image"
-                        >
-                            <Plus className="w-2.5 h-2.5" />
-                            <span>Ref</span>
-                        </button>
+                        })()}
                      </div>
+                     ) : (
+                         <div className="text-[10px] text-gray-500 italic mb-1 flex items-center gap-1">
+                             <ImageIcon className="w-3 h-3" />
+                             Generate Storyboard Image first to enable video references.
+                         </div>
+                     )}
 
-                     <textarea
-                        value={scene.np_prompt}
-                        onChange={(e) => onUpdate(scene.id, 'np_prompt', e.target.value)}
-                        className={`flex-1 w-full bg-black/20 p-2 rounded border border-white/5 font-mono text-xs text-gray-400 resize-none outline-none focus:border-banana-500/30 min-h-[4rem] transition-all ${promptGenLoading ? 'opacity-50 animate-pulse cursor-wait' : ''}`}
-                        disabled={promptGenLoading}
-                     />
-                </div>
-            </div>
-            
-            {/* Bottom: Dialogue & Audio Section */}
-            <div className="border-t border-white/5 bg-black/20 p-3">
-                 <div className="flex items-center justify-between mb-2">
-                     <div className="flex items-center gap-2">
-                        <MessageSquare className="w-3.5 h-3.5 text-green-400" />
-                        <h4 className="text-xs font-bold text-gray-300">{labels.dialogueLabel}</h4>
-                     </div>
-                     <button 
-                        onClick={() => {
-                            const newDialogue = [...(scene.audio_dialogue || []), { speaker: 'Role', text: 'Content...' }];
-                            onUpdate(scene.id, 'audio_dialogue', newDialogue);
+                     <textarea 
+                        value={scene.video_prompt || scene.visual_desc}
+                        onChange={(e) => {
+                            if (scene.video_prompt) {
+                                onUpdate(scene.id, 'video_prompt', e.target.value);
+                            } else {
+                                onUpdate(scene.id, 'visual_desc', e.target.value);
+                            }
                         }}
-                        className="p-1 hover:bg-white/10 rounded text-gray-500 hover:text-green-400 transition-colors"
-                        title="Add Dialogue Line"
-                     >
-                        <Plus className="w-3.5 h-3.5" />
-                     </button>
-                 </div>
-                 
-                 {/* Dialogue List - Editable */}
-                 <div className="space-y-1 mb-2">
-                    {scene.audio_dialogue && scene.audio_dialogue.length > 0 ? (
-                        scene.audio_dialogue.map((line, idx) => (
-                            <div key={idx} className="flex gap-2 text-xs items-center group/line">
-                                <input 
-                                    className="font-bold text-banana-500 bg-transparent border-none outline-none w-24 text-right focus:bg-white/5 rounded px-1"
-                                    value={line.speaker}
-                                    onChange={(e) => {
-                                        const newDialogue = [...(scene.audio_dialogue || [])];
-                                        newDialogue[idx] = { ...newDialogue[idx], speaker: e.target.value };
-                                        onUpdate(scene.id, 'audio_dialogue', newDialogue);
-                                    }}
-                                />
-                                <span className="text-gray-500">:</span>
-                                <input 
-                                    className="text-gray-400 bg-transparent border-none outline-none flex-1 focus:bg-white/5 rounded px-1"
-                                    value={line.text}
-                                    onChange={(e) => {
-                                        const newDialogue = [...(scene.audio_dialogue || [])];
-                                        newDialogue[idx] = { ...newDialogue[idx], text: e.target.value };
-                                        onUpdate(scene.id, 'audio_dialogue', newDialogue);
-                                    }}
-                                />
-                                <button 
-                                    onClick={() => {
-                                        const newDialogue = [...(scene.audio_dialogue || [])];
-                                        newDialogue.splice(idx, 1);
-                                        onUpdate(scene.id, 'audio_dialogue', newDialogue);
-                                    }} 
-                                    className="opacity-0 group-hover/line:opacity-100 text-red-500/50 hover:text-red-500 transition-opacity p-1"
-                                >
-                                    <Trash2 className="w-3 h-3" />
-                                </button>
-                            </div>
-                        ))
-                    ) : (
-                        <div className="text-[10px] text-gray-600 italic pl-2">No dialogue. Click + to add.</div>
-                    )}
-                 </div>
+                        className={`flex-1 w-full p-2 rounded border border-white/5 text-xs resize-none outline-none focus:border-blue-500/30 min-h-[10rem] transition-colors ${
+                            scene.video_prompt ? 'bg-green-900/10 text-green-100 border-green-500/20' : 'bg-black/20 text-gray-300'
+                        } ${videoPromptUpdating ? 'opacity-50 animate-pulse cursor-wait' : ''}`}
+                        placeholder={labels.visualDesc}
+                        disabled={videoPromptUpdating}
+                     />
+                     
 
-                 {/* SFX / BGM */}
-                 <div className="flex flex-col gap-2 text-[10px] text-gray-500 border-t border-white/5 pt-2 mt-2">
-                     <div className="flex items-center gap-2 group/sfx">
-                         <Music className="w-3 h-3 text-gray-600 group-focus-within/sfx:text-banana-500" />
-                         <span className="w-8 shrink-0">{labels.sfxLabel}:</span>
-                         <input 
-                            value={scene.audio_sfx || ''} 
-                            onChange={(e) => onUpdate(scene.id, 'audio_sfx', e.target.value)}
-                            className="bg-transparent border-b border-transparent hover:border-white/10 focus:border-banana-500 outline-none flex-1 text-gray-400 transition-colors px-1"
-                            placeholder="Sound Effects..."
-                          />
-                     </div>
-                     <div className="flex items-center gap-2 group/bgm">
-                         <Music className="w-3 h-3 text-gray-600 opacity-50 group-focus-within/bgm:text-banana-500 group-focus-within/bgm:opacity-100" />
-                         <span className="w-8 shrink-0">BGM:</span>
-                         <input 
-                            value={scene.audio_bgm || ''} 
-                            onChange={(e) => onUpdate(scene.id, 'audio_bgm', e.target.value)}
-                            className="bg-transparent border-b border-transparent hover:border-white/10 focus:border-banana-500 outline-none flex-1 text-gray-400 transition-colors px-1"
-                            placeholder="Background Music..."
-                          />
-                     </div>
-                 </div>
+
+
+                </div>
+
+                {/* 2. RIGHT PANE: IMAGE + DIALOGUE */}
+                <div className="flex flex-col h-full divide-y divide-white/5">
+                    
+                    {/* Top: Image Prompt (flex-1) */}
+                    <div className="p-3 flex flex-col gap-2 relative group flex-1">
+                         <h4 className="text-[10px] uppercase tracking-widest text-purple-400 font-bold flex justify-between items-center">
+                            <span className="flex items-center gap-2"><ImageIcon className="w-3 h-3" /> {labels.imagePromptLabel}</span>
+                            <button onClick={() => navigator.clipboard.writeText(scene.np_prompt)} className="text-gray-500 hover:text-white transition-colors" title={labels.copy}><Copy className="w-3 h-3" /></button>
+                         </h4>
+                         
+                         {/* Reference Image IDs List */}
+                         <div className="flex flex-wrap gap-2">
+                            {(scene.assetIds || []).length === 0 && (
+                                <span className="text-[10px] text-gray-600 italic py-0.5 self-center">No references</span>
+                            )}
+                            {(scene.assetIds || []).map(assetId => {
+                                const asset = assets.find(a => a.id === assetId);
+                                return (
+                                    <div key={assetId} className="flex items-center gap-1 bg-purple-500/10 border border-purple-500/20 rounded px-1.5 py-0.5 text-[10px] text-purple-200 animate-fadeIn">
+                                        <LinkIcon className="w-2.5 h-2.5 opacity-70" />
+                                        <span className="max-w-[80px] truncate" title={asset?.name || assetId}>{asset?.name || assetId}</span>
+                                        <button 
+                                            onClick={() => handleRemoveAsset(assetId)}
+                                            className="hover:text-white ml-1 transition-colors"
+                                            title="Remove Reference"
+                                        >
+                                            <X className="w-2.5 h-2.5" /> 
+                                        </button>
+                                    </div>
+                                );
+                            })}
+                            <button 
+                                onClick={() => setActiveAssetSelector('image')}
+                                className="flex items-center gap-1 bg-white/5 hover:bg-white/10 border border-white/5 hover:border-white/20 rounded px-1.5 py-0.5 text-[10px] text-gray-400 hover:text-white transition-all"
+                                title="Add Reference Image"
+                            >
+                                <Plus className="w-2.5 h-2.5" />
+                                <span>Ref</span>
+                            </button>
+                         </div>
+
+                         <textarea
+                            value={scene.np_prompt}
+                            onChange={(e) => onUpdate(scene.id, 'np_prompt', e.target.value)}
+                            className={`flex-1 w-full bg-black/20 p-2 rounded border border-white/5 font-mono text-xs text-gray-400 resize-none outline-none focus:border-banana-500/30 min-h-[6rem] transition-all ${promptGenLoading ? 'opacity-50 animate-pulse cursor-wait' : ''}`}
+                            disabled={promptGenLoading}
+                         />
+                    </div>
+
+                    {/* Bottom: Dialogue & Audio Section (Compact) */}
+                    <div className="bg-black/20 p-2 h-[120px] overflow-y-auto">
+                         <div className="flex items-center justify-between mb-1 sticky top-0 bg-black/20 backdrop-blur-sm z-10">
+                             <div className="flex items-center gap-2">
+                                <MessageSquare className="w-3 h-3 text-green-400" />
+                                <h4 className="text-[10px] font-bold text-gray-300">{labels.dialogueLabel}</h4>
+                             </div>
+                             <button 
+                                onClick={() => {
+                                    const newDialogue = [...(scene.audio_dialogue || []), { speaker: 'Role', text: 'Content...' }];
+                                    onUpdate(scene.id, 'audio_dialogue', newDialogue);
+                                }}
+                                className="p-0.5 hover:bg-white/10 rounded text-gray-500 hover:text-green-400 transition-colors"
+                                title="Add Dialogue Line"
+                             >
+                                <Plus className="w-3 h-3" />
+                             </button>
+                         </div>
+                         
+                         {/* Dialogue List - Editable */}
+                         <div className="space-y-1 mb-1">
+                            {scene.audio_dialogue && scene.audio_dialogue.length > 0 ? (
+                                scene.audio_dialogue.map((line, idx) => (
+                                    <div key={idx} className="flex gap-1 text-[10px] items-center group/line">
+                                        <input 
+                                            className="font-bold text-banana-500 bg-transparent border-none outline-none w-16 text-right focus:bg-white/5 rounded px-1"
+                                            value={line.speaker}
+                                            onChange={(e) => {
+                                                const newDialogue = [...(scene.audio_dialogue || [])];
+                                                newDialogue[idx] = { ...newDialogue[idx], speaker: e.target.value };
+                                                onUpdate(scene.id, 'audio_dialogue', newDialogue);
+                                            }}
+                                        />
+                                        <span className="text-gray-500">:</span>
+                                        <input 
+                                            className="text-gray-400 bg-transparent border-none outline-none flex-1 focus:bg-white/5 rounded px-1"
+                                            value={line.text}
+                                            onChange={(e) => {
+                                                const newDialogue = [...(scene.audio_dialogue || [])];
+                                                newDialogue[idx] = { ...newDialogue[idx], text: e.target.value };
+                                                onUpdate(scene.id, 'audio_dialogue', newDialogue);
+                                            }}
+                                        />
+                                        <button 
+                                            onClick={() => {
+                                                const newDialogue = [...(scene.audio_dialogue || [])];
+                                                newDialogue.splice(idx, 1);
+                                                onUpdate(scene.id, 'audio_dialogue', newDialogue);
+                                            }} 
+                                            className="opacity-0 group-hover/line:opacity-100 text-red-500/50 hover:text-red-500 transition-opacity p-0.5"
+                                        >
+                                            <Trash2 className="w-2.5 h-2.5" />
+                                        </button>
+                                    </div>
+                                ))
+                            ) : (
+                                <div className="text-[10px] text-gray-600 italic pl-2">No dialogue.</div>
+                            )}
+                         </div>
+
+                         {/* SFX / BGM */}
+                         <div className="flex flex-col gap-1 text-[10px] text-gray-500 border-t border-white/5 pt-1 mt-1">
+                             <div className="flex items-center gap-2 group/sfx">
+                                 <Music className="w-2.5 h-2.5 text-gray-600 group-focus-within/sfx:text-banana-500" />
+                                 <span className="w-6 shrink-0 truncate">{labels.sfxLabel}:</span>
+                                 <input 
+                                    value={scene.audio_sfx || ''} 
+                                    onChange={(e) => onUpdate(scene.id, 'audio_sfx', e.target.value)}
+                                    className="bg-transparent border-b border-transparent hover:border-white/10 focus:border-banana-500 outline-none flex-1 text-gray-400 transition-colors px-1"
+                                    placeholder="SFX..."
+                                  />
+                             </div>
+                             <div className="flex items-center gap-2 group/bgm">
+                                 <Music className="w-2.5 h-2.5 text-gray-600 opacity-50 group-focus-within/bgm:text-banana-500 group-focus-within/bgm:opacity-100" />
+                                 <span className="w-6 shrink-0 truncate">BGM:</span>
+                                 <input 
+                                    value={scene.audio_bgm || ''} 
+                                    onChange={(e) => onUpdate(scene.id, 'audio_bgm', e.target.value)}
+                                    className="bg-transparent border-b border-transparent hover:border-white/10 focus:border-banana-500 outline-none flex-1 text-gray-400 transition-colors px-1"
+                                    placeholder="BGM..."
+                                  />
+                             </div>
+                         </div>
+                    </div>
+                </div>
             </div>
         </div>
       </div>
       
-      {showAssetSelector && (
+      {activeAssetSelector !== 'none' && (
           <AssetSelector 
             assets={assets}
-            selectedIds={scene.assetIds || []}
+            selectedIds={activeAssetSelector === 'video' ? (scene.videoAssetIds || []) : (scene.assetIds || [])}
             onSelect={handleAddAsset}
-            onClose={() => setShowAssetSelector(false)}
+            onClose={() => setActiveAssetSelector('none')}
             onAssetCreated={onAddAsset}
+            extraAssets={scene.imageUrl ? [{
+                id: `scene_img_${scene.id}`,
+                name: "Current Scene",
+                description: "The current generated storyboard image for this scene.",
+                type: "item", // Using item as a generic type for scene reference
+                refImageUrl: scene.imageUrl
+            }] : []}
           />
       )}
     </div>

@@ -8,9 +8,10 @@ interface AssetSelectorProps {
   onClose: () => void;
   onAssetCreated?: (asset: Asset) => void;
   selectedIds?: string[];
+  extraAssets?: Asset[]; // New prop for temporary assets like current scene image
 }
 
-export const AssetSelector: React.FC<AssetSelectorProps> = ({ assets, onSelect, onClose, onAssetCreated, selectedIds = [] }) => {
+export const AssetSelector: React.FC<AssetSelectorProps> = ({ assets, onSelect, onClose, onAssetCreated, selectedIds = [], extraAssets = [] }) => {
   const [search, setSearch] = React.useState('');
   const [pendingUpload, setPendingUpload] = React.useState<{ base64: string; name: string } | null>(null);
   const [newAssetInfo, setNewAssetInfo] = React.useState<{ name: string; description: string; type: Asset['type'] }>({
@@ -20,7 +21,10 @@ export const AssetSelector: React.FC<AssetSelectorProps> = ({ assets, onSelect, 
   });
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const filteredAssets = assets.filter(a => 
+  // Combine regular assets with extra assets (ensuring no duplicates if IDs clash)
+  const allAssets = [...extraAssets, ...assets];
+  
+  const filteredAssets = allAssets.filter(a => 
     a.name.toLowerCase().includes(search.toLowerCase()) || 
     a.description.toLowerCase().includes(search.toLowerCase())
   );

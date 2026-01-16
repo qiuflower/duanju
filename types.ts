@@ -27,8 +27,17 @@ export interface Scene {
   videoUrl?: string; // New: Generated Video URL
   narrationAudioUrl?: string; // New: Generated Narration Audio URL (Blob URL)
   
-  assetIds?: string[]; // IDs of assets appearing in this scene
+  assetIds?: string[]; // IDs of assets appearing in this scene (Image Mode)
+  videoAssetIds?: string[]; // IDs of assets used specifically for Video Mode (Independent from Image Mode)
   useAssets?: boolean; // Whether to use assets for video generation
+  visualReview?: VisualReviewResult; // New: Agent Visual Review Result
+}
+
+export interface VisualReviewResult {
+  passed: boolean;
+  dimensions: { name: string; score: number; comment: string }[];
+  risks: string[];
+  suggestions: string[];
 }
 
 export interface GeneratedImage {

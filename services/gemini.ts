@@ -1,5 +1,5 @@
 //import { GoogleGenAI, Type, GenerateContentResponse, Modality } from "@google/genai";
-import { Scene, Asset, GlobalStyle, ContentPart, GenerateContentResponse, VideosOperation } from "../types";
+import { Scene, Asset, GlobalStyle, ContentPart, GenerateContentResponse, VideosOperation, VisualReviewResult } from "../types";
 import { modelManager as ai } from "./ai/model-manager";
 // --- Lightweight shims to replace @google/genai types/enums ---
 
@@ -219,7 +219,7 @@ export const generateSpeech = async (text: string, voiceName: string = 'Kore'): 
 // --- VIDEO GENERATION (VEO) ---
 
 // Helper: Smart Asset Matching
-const matchAssetsToPrompt = (prompt: string, assets: Asset[], explicitIds: string[] = []): Asset[] => {
+export const matchAssetsToPrompt = (prompt: string, assets: Asset[], explicitIds: string[] = []): Asset[] => {
   // 1. Filter assets that have reference images
   const availableAssets = assets.filter(a => !!a.refImageUrl);
   
@@ -263,12 +263,24 @@ const parseDataUrl = (value: string): { mimeType: string; base64: string } | nul
 
 const base64ByteSize = (base64: string) => Math.floor((base64.length * 3) / 4);
 
+const guessImageMimeFromBase64 = (base64: string): string => {
+  const s = (base64 || "").trim().replace(/\s+/g, "");
+  if (!s) return "image/png";
+  if (s.startsWith("/9j/")) return "image/jpeg";
+  if (s.startsWith("iVBORw0KGgo")) return "image/png";
+  if (s.startsWith("R0lGOD")) return "image/gif";
+  if (s.startsWith("UklGR")) return "image/webp";
+  if (s.startsWith("Qk")) return "image/bmp";
+  return "image/png";
+};
+
 const normalizeImageToDataUrl = (value: string): string => {
   if (!value) return "";
   if (/^data:/i.test(value)) return value;
   if (isHttpUrl(value)) return value;
   const b64 = value.trim().replace(/\s+/g, "");
-  return `data:image/png;base64,${b64}`;
+  const mimeType = guessImageMimeFromBase64(b64);
+  return `data:${mimeType};base64,${b64}`;
 };
 
 const findFirstHttpUrlDeep = (input: unknown): string | null => {
@@ -424,55 +436,96 @@ const prepareVideoImageForApi = async (
   if (!input) return { value: "", bytes: 0 };
   if (isHttpUrl(input)) return { value: input, bytes: 0 };
 
-  const parsed = parseDataUrl(input);
-  const mimeType = parsed?.mimeType || "image/png";
-  let base64 = parsed?.base64 || input;
+  const dataUrl = normalizeImageToDataUrl(input);
+  const parsed = parseDataUrl(dataUrl);
+  const base64 = (parsed?.base64 || "").trim().replace(/\s+/g, "");
+  const bytes = base64ByteSize(base64);
 
-  if (base64ByteSize(base64) <= options.maxBytes) {
-    return { value: base64, bytes: base64ByteSize(base64) };
+  if (bytes <= options.maxBytes) {
+    return { value: dataUrl, bytes };
   }
 
-  const dataUrl = parsed ? input : `data:${mimeType};base64,${base64}`;
   const attempt1 = await compressDataUrlToJpegBase64(dataUrl, 1024, 0.82);
   if (attempt1 && base64ByteSize(attempt1) <= options.maxBytes) {
-    return { value: attempt1, bytes: base64ByteSize(attempt1) };
+    return { value: `data:image/jpeg;base64,${attempt1}`, bytes: base64ByteSize(attempt1) };
   }
 
   const attempt2 = await compressDataUrlToJpegBase64(dataUrl, 768, 0.76);
   if (attempt2 && base64ByteSize(attempt2) <= options.maxBytes) {
-    return { value: attempt2, bytes: base64ByteSize(attempt2) };
+    return { value: `data:image/jpeg;base64,${attempt2}`, bytes: base64ByteSize(attempt2) };
   }
 
   const attempt3 = await compressDataUrlToJpegBase64(dataUrl, 512, 0.7);
-  if (attempt3) return { value: attempt3, bytes: base64ByteSize(attempt3) };
+  if (attempt3) return { value: `data:image/jpeg;base64,${attempt3}`, bytes: base64ByteSize(attempt3) };
 
-  return { value: base64, bytes: base64ByteSize(base64) };
+  return { value: dataUrl, bytes };
+};
+
+export const constructVideoPrompt = (scene: Scene, globalStyle?: GlobalStyle): string => {
+  // Always ensure Global Style is prepended if available
+  const stylePrefix = globalStyle?.visualTags ? `${globalStyle.visualTags}. ` : "";
+  
+  if (scene.video_prompt) {
+      // If prompt already exists, check if it starts with style. If not, prepend it.
+      if (stylePrefix && !scene.video_prompt.startsWith(stylePrefix.trim())) {
+          return `${stylePrefix}${scene.video_prompt}`;
+      }
+      return scene.video_prompt;
+  }
+
+  const corePrompt = [
+    `Cinematic Shot: ${scene.visual_desc}`,
+    scene.video_camera ? `Camera Movement: ${scene.video_camera}` : "",
+    scene.video_vfx ? `VFX: ${scene.video_vfx}` : "",
+    scene.audio_bgm ? `Atmosphere: ${scene.audio_bgm}` : "",
+    scene.audio_dialogue ? `Character Dialogue: ${scene.audio_dialogue?.map(d => d.text).join(' ') || ''}` : ""
+  ].filter(Boolean).join('. ');
+
+  return `${stylePrefix}${corePrompt}`;
 };
 
 export const generateVideo = async (
   imageBase64: string,
   scene: Scene,
   aspectRatio: '16:9' | '9:16' = '16:9',
-  assets: Asset[] = []
+  assets: Asset[] = [],
+  globalStyle?: GlobalStyle
 ): Promise<string> => {
-  // 拼 prompt（尽量短一些）
-  const promptParts = [
-    `Cinematic Shot: ${scene.visual_desc}`,
-    scene.video_camera ? `Camera Movement: ${scene.video_camera}` : "",
-    scene.video_vfx ? `VFX: ${scene.video_vfx}` : "",
-    scene.audio_bgm ? `Atmosphere: ${scene.audio_bgm}` : "",
-    scene.audio_dialogue ? `Character Dialogue: ${scene.audio_dialogue.map(d => d.text).join(' ')}` : ""
-  ].filter(Boolean).join('. ');
-
-  const safePrompt = promptParts.substring(0, 800);
+  // Use helper to get prompt (with style injection)
+  const fullPrompt = constructVideoPrompt(scene, globalStyle);
+  const safePrompt = fullPrompt.substring(0, 800);
+  
   // veo 只支持英文：如果包含中文等非 ASCII，自动让后端帮你转英文
   const enhancePrompt = /[^\x00-\x7F]/.test(safePrompt);
 
   // Smart Asset Matching
-  const matchedAssets = matchAssetsToPrompt(scene.visual_desc, assets, scene.assetIds || []);
-  
-  // Selection Logic: Top 3 Assets
-  const topAssets = matchedAssets.slice(0, 3);
+  let topAssets: Asset[] = [];
+
+  // Check if asset usage is disabled (Manual Override)
+  // If scene.useAssets is explicitly false, we ignore ALL external assets (except the scene image itself)
+  const useAssets = scene.useAssets !== false;
+
+  if (useAssets) {
+      // STRICT MODE: If videoAssetIds is defined (user manually managed video assets), 
+      // use EXACTLY those assets (filtered by availability of ref image).
+      // Special handling for Current Scene Image ID.
+      if (scene.videoAssetIds !== undefined) {
+          // 1. Regular Assets
+          topAssets = assets.filter(a => scene.videoAssetIds!.includes(a.id) && a.refImageUrl);
+          
+          // 2. Current Scene Image Check
+          // If the special ID for current scene is present, we must ensure it's included.
+          // Since it's not in the 'assets' array, we handle it in the imagesToSend construction.
+      } else {
+          // FALLBACK MODE: Use legacy smart matching (Agent B IDs + Prompt Matching)
+          const targetAssetIds = scene.assetIds || [];
+          const matchedAssets = matchAssetsToPrompt(scene.visual_desc, assets, targetAssetIds);
+          topAssets = matchedAssets.slice(0, 3);
+      }
+  } else {
+      // Asset Usage Disabled: Clear topAssets so only storyboard image is used
+      topAssets = [];
+  }
   
   // Prepare Images Array
   let imagesToSend: string[] = [];
@@ -480,10 +533,22 @@ export const generateVideo = async (
   if (topAssets.length > 0) {
       imagesToSend = topAssets.map(a => (a.refImageUrl || ""));
   }
-  
-  // Fill with storyboard if we have fewer than 3 images
-  // Requirement: "Select top 3 matching resources... If < 3, use storyboard to fill"
-  if (imagesToSend.length < 3) {
+
+  // Handle Special "Current Scene Image" ID if present in videoAssetIds
+  // We construct the ID based on scene.id to match frontend logic: `scene_img_${scene.id}`
+  const currentSceneAssetId = `scene_img_${scene.id}`;
+  const shouldIncludeSceneImage = scene.videoAssetIds?.includes(currentSceneAssetId);
+
+  // If user explicitly selected the scene image OR (in fallback mode) we have space OR (useAssets is false)
+  // Note: If useAssets is false, we MUST include the storyboard image as the only reference.
+  if (shouldIncludeSceneImage || !useAssets) {
+      // Prepend or Append? Usually scene image is base, so maybe prepend.
+      // But order matters for VEO? Let's append to keep character consistency if any.
+      // Actually, if it's explicitly selected, it's already "in the list" concept.
+      // But since it wasn't in 'topAssets' (which comes from 'assets'), we add it now.
+      imagesToSend.push(imageBase64);
+  } else if (scene.videoAssetIds === undefined && imagesToSend.length < 3) {
+      // Legacy Fallback: Fill with storyboard if we have fewer than 3 images
       imagesToSend.push(imageBase64);
   }
   
@@ -495,12 +560,12 @@ export const generateVideo = async (
   const baseUrl = "https://ai.t8star.cn";
   const model = "veo3.1-components";
 
-  // key：必须使用 VIDEO_API_KEY
-  const key = (process.env.VIDEO_API_KEY || "").trim();
+  // key：必须使用 VIDEO_API_KEY (Fallback to T8/Polo keys)
+  const key = (process.env.VIDEO_API_KEY || process.env.T8_VIDEO_API_KEY || process.env.POLO_VIDEO_API_KEY || "").trim();
 
   if (!key) {
     console.error("VIDEO_API_KEY is missing");
-    throw new Error("VIDEO_API_KEY is required for video generation");
+    throw new Error("VIDEO_API_KEY (or T8_VIDEO_API_KEY) is required for video generation. Please check your .env.local file.");
   }
 
   const authHeader = key
@@ -531,7 +596,7 @@ export const generateVideo = async (
     }
 
     if (payloadBytes(finalImages) > maxTotalBytes && finalImages.length === 1 && !isHttpUrl(finalImages[0].value)) {
-      const more = await prepareVideoImageForApi(`data:image/png;base64,${finalImages[0].value}`, { maxBytes: maxTotalBytes });
+      const more = await prepareVideoImageForApi(finalImages[0].value, { maxBytes: maxTotalBytes });
       finalImages = [{ value: more.value, bytes: more.bytes }];
     }
 
@@ -1144,8 +1209,9 @@ const AGENT_B_PROMPT = (language: string, assets: Asset[], style: GlobalStyle, p
   const work = style.work.custom || style.work.selected;
   
   return `
-You are **Agent B: The Netflix Master Showrunner**.
-Your Goal: Adapt the provided novel text into a **high-retention, fast-paced Short Drama storyboard**.
+You are the **Veo Cinematography Architect (VCA)**. You are an expert Director of Photography (DP) and Visual Engineer specialized in Google Veo.
+**Objective:** Transmute literary narrative text (novels/scripts) into precise, physically descriptive video generation prompts (Shot Lists).
+**Output Format:** Strict JSON Array (wrapped in a "scenes" object).
 
 **IMPORTANT: STRICT LANGUAGE ENFORCEMENT**
 ALL generated text (narration, visual_desc, dialogue, etc.) **MUST BE IN ${language}**.
@@ -1159,29 +1225,47 @@ You MUST provide a COMPLETE and DETAILED breakdown for every scene.
 - If the input text contains minor details, include them in the visual description.
 - NO simplification, summarization, or omission is allowed. Every word of the source text must be visually represented or spoken.
 - Do not worry about the output length. If the text requires many scenes, generate many scenes.
-- Do not merge distinct actions into one shot.
 
-For EACH scene, you must specify:
-1. **Shot Composition**: Full details on framing, angle, and lighting.
-2. **Character Actions**: Precise movement, expressions, and acting instructions. For continuous actions, break them down into minimal action units.
-3. **Scene Transitions**: How the scene begins and ends (cuts, fades, wipes, etc.).
-4. **Timing/Rhythm**: Precise duration and pacing instructions.
-5. **Dialogue**: Full dialogue text with emotional tone.
-6. **VFX/Effects**: Detailed description of any visual effects, particles, or atmosphere.
-7. **Camera Movement**: Specific camera moves (Push, Pull, Pan, Tilt, Dolly, Truck, etc.) and lens choices.
-8. **Keyframes**: Describe the key visual elements that must be present.
-9. **Originality**: Preserve ALL original creative concepts from the source text.
+---
 
-**Core Philosophy:**
-1. Hook (Golden 3s).
-2. Conflict.
-3. Reversal.
-4. **Fidelity**: Every line of the original novel must be represented in the storyboard. Do not cut content for brevity.
+## 1. THE VEO FORMULA (Strict Syntax) 
+Veo operates on pixel-level instructions, not narrative flow. For every shot, you must assemble the \`video_prompt\` using this prioritized sequence (The "Pyramid"): 
 
-**ASSET HANDLING (CRITICAL):**
-- Identify which Assets (Characters/Locations) appear in each scene.
-- Return their IDs in the \`assetIds\` array.
-- In \`np_prompt\`, ALWAYS use the format: "{{asset_id}} performing action...".
+\`[CAMERA MOVEMENT & LENS] + [LIGHTING & PALETTE] + [SUBJECT VISUALS & ACTION] + [ENVIRONMENT & ATMOSPHERE] + [TECH SPECS]\`
+
+---
+
+## 2. TRANSLATION RULES (The "Director's Cut" Protocols) 
+You must apply these rules to filter every line of input text: 
+
+### Rule A: The "Unfilmable" Protocol (Psychology -> Physics) 
+* **Trigger:** Text describes feelings, thoughts, smells, or abstract concepts (e.g., "He felt a wave of nostalgia," "She realized the truth"). 
+* **Action:** You MUST convert these into visible physical manifestations or micro-expressions. 
+* **Example:** "He felt anxious" -> *Prompt:* "Close-up, sweat beading on forehead, eyes darting left and right, biting lip." 
+
+### Rule B: The "Dialogue" Protocol (Speech -> Reaction) 
+* **Trigger:** Dialogue or spoken lines. 
+* **Action:** Veo cannot generate synchronized speech. **DO NOT transcribe dialogue.** Instead, visualize the *emotion* of the speaker or the *reaction* of the listener. 
+* **Example:** 
+    * *Input:* John shouted, "Get out!" 
+    * *Prompt:* "Medium shot. John pointing aggressively at the door, mouth open in a scream, veins on neck visible, face red with anger." (Focus on the physical act of shouting, not the words). 
+
+### Rule C: Visual Anchor Locking (Consistency Enforcement) 
+* **Trigger:** A character name from the GLOBAL CONTEXT appears. 
+* **Action:** You MUST inject their specific \`[Visual Tags]\` (or refer to them by ID) into every single prompt where they appear. 
+* **Prohibition:** Never allow a character to change clothes, hair, or features unless the script explicitly describes a costume change. If the Context says "G-One is white," he is white in every single frame. 
+
+### Rule D: Style & Lighting Enforcement 
+* **Action:** Apply the user-defined **Art Style/Lighting** to every shot to ensure continuity. If the style is "Cyberpunk," every prompt must include specific keywords like "neon," "volumetric fog," or "wet pavement." 
+
+---
+
+## 3. PROFESSIONAL VOCABULARY (Use These Terms) 
+* **Camera:** Static, Pan (Left/Right), Tilt (Up/Down), Dolly (In/Out), Truck (Left/Right), Crane, Handheld (Shaky/Stabilized), FPV Drone, Orbit/Arc. 
+* **Lens:** Wide (14mm/24mm), Standard (35mm/50mm), Telephoto (85mm/100mm), Anamorphic (Cinematic aspect ratio), Macro. 
+* **Lighting:** Softbox, Hard Light, Rim Light (Backlight), Volumetric (God Rays), Practical Lights, Bioluminescent, Silhouette, Chiaroscuro (High Contrast). 
+
+---
 
 **Context:**
 - Style: ${director}, ${work}
@@ -1202,6 +1286,7 @@ ${assetMap}
       "video_duration": "3s",
       "video_vfx": "Detailed VFX instructions in ${language}",
       "np_prompt": "{{asset_id}} detailed action description for video generation in ${language}...",
+      "video_prompt": "example:Standard(35mm), Static Camera. [Lighting details]. [Character Visuals] + [Specific Action]. [Environment]. 4k, highly detailed.(in ${language})",
       "audio_dialogue": [{ "speaker": "Hero", "text": "(Tone) Line in ${language}" }],
       "audio_bgm": "Atmosphere and music description in ${language}",
       "audio_sfx": "Sound effects description in ${language}",
@@ -1396,22 +1481,38 @@ export const analyzeNovelText = async (
     }
     
     scenes = scenes.map(scene => {
-      let finalPrompt = scene.np_prompt;
+      let finalNpPrompt = scene.np_prompt;
+      let finalVideoPrompt = scene.video_prompt;
+
       if (assets.length > 0) {
         assets.forEach(asset => {
             const regex = new RegExp(`\\{\\{?${asset.id}\\}?\\}`, 'gi');
             // Avoid duplicating global style if it's already in asset.visualDna (legacy) or empty
             const assetDna = (asset.visualDna && asset.visualDna !== style.visualTags) ? asset.visualDna : "";
             const injection = `(${asset.name}, ${asset.description}${assetDna ? `, ${assetDna}` : ""})`;
-            finalPrompt = finalPrompt.replace(regex, injection);
+            finalNpPrompt = finalNpPrompt.replace(regex, injection);
+            
+            // For video prompt, if it contains the asset ID (optional but possible), we replace it too.
+            // But mostly video_prompt relies on visual description.
+            if (finalVideoPrompt && finalVideoPrompt.includes(asset.id)) {
+                 finalVideoPrompt = finalVideoPrompt.replace(regex, injection);
+            }
         });
       }
-      console.log(`[Gemini] Merging prompt: ${stylePrefix} + ${finalPrompt}`);
+      console.log(`[Gemini] Merging prompt: ${stylePrefix} + ${finalNpPrompt}`);
       
       // New format: Style Prefix + Content
-      finalPrompt = `${stylePrefix}, ${finalPrompt}`;
+      finalNpPrompt = `${stylePrefix}, ${finalNpPrompt}`;
       
-      return { ...scene, np_prompt: finalPrompt };
+      // Also splice style prefix into video_prompt if it exists
+      if (finalVideoPrompt) {
+          // Check if stylePrefix is already there to avoid double prefixing (e.g. if LLM followed instruction perfectly)
+          if (!finalVideoPrompt.startsWith(stylePrefix)) {
+               finalVideoPrompt = `${stylePrefix}, ${finalVideoPrompt}`;
+          }
+      }
+
+      return { ...scene, np_prompt: finalNpPrompt, video_prompt: finalVideoPrompt };
     });
     
     return { scenes, visualDna: generatedDna };
@@ -1531,4 +1632,307 @@ export const generateSceneImage = async (
 
     const raw = extractImageFromResponse(response);
     return await ensurePngDataUrl(raw);
+};
+
+// --- VISUAL MASTER AGENT (Video Review) ---
+
+export const reviewVideoPrompt = async (
+    scene: Scene,
+    language: string = 'Chinese'
+): Promise<VisualReviewResult> => {
+    const promptToReview = constructVideoPrompt(scene);
+    
+    const sysPrompt = `
+You are the **Visual Master (Agent Visual Reviewer)**, acting as a Netflix Director.
+Your Goal: Review the Video Generation Prompt for a short drama scene.
+
+**Input Prompt:**
+"${promptToReview}"
+
+**CRITICAL CHECK: Veo3 Language Requirement**
+Veo3 is an English-native model. 
+If the Input Prompt contains non-English text (e.g., Chinese, Japanese), you MUST:
+1. Mark it as a **Risk**: "Prompt is not in English (Veo3 optimal language)."
+2. Suggest: "Translate to professional English cinematic prompt."
+3. **STRONGLY CONSIDER** failing the review (passed: false) or giving a low score on "AI Tech Advantage" unless the prompt is extremely simple.
+
+**Review Dimensions (10 Fixed Dimensions):**
+1. **AI Logic/Consistency** (AI 生成内容是否存在穿帮问题): Check for logical inconsistencies or "hallucinations".
+2. **Script Alignment** (镜头是否匹配剧本核心需求): Does it match the visual description?
+3. **AI Tech Advantage** (是否充分发挥 AI 视觉创作的技术特长): Is it visually impressive?
+4. **Audio-Visual Language** (视听语言设计是否合理): Composition, lighting, atmosphere.
+5. **Scene Scheduling** (场景调度是否流畅自然): Action flow.
+6. **Art Style Consistency** (美术风格是否统一且贴合主题): Consistency.
+7. **Editing Rhythm** (剪辑节奏是否符合叙事逻辑): Pacing implied by prompt.
+8. **Camera Language** (摄影与镜头语言运用是否恰当): Camera moves/angles.
+9. **VFX & Production** (特效与美术制作是否达标): Quality of described elements.
+10. **Sound Design Match** (拟音与声音设计是否适配画面): Audio/Visual sync.
+
+**Output Requirements:**
+- Provide a score (1-10) and brief comment for EACH dimension.
+- List **Key Production Risks**.
+- List **Actionable Suggestions**.
+- **Final Verdict**: Pass (true) or Fail (false).
+- **Language**: Output in ${language}.
+
+**Response Format (JSON Only):**
+{
+  "passed": boolean,
+  "dimensions": [
+    { "name": "Dimension Name", "score": number, "comment": "string" }
+  ],
+  "risks": ["string"],
+  "suggestions": ["string"]
+}
+`;
+
+    try {
+        const response = await retryWithBackoff<GenerateContentResponse>(() => ai.models.generateContent({
+            model: 'gemini-3-flash-preview',
+            contents: { parts: [{ text: sysPrompt }] },
+            config: {
+                responseMimeType: "application/json"
+            }
+        }));
+        
+        const json = safeJsonParse<VisualReviewResult>(response.text, {
+            passed: false,
+            dimensions: [],
+            risks: [],
+            suggestions: []
+        });
+        return json;
+    } catch (e) {
+        console.error("Visual Master Review Failed", e);
+        return {
+            passed: false,
+            dimensions: [],
+            risks: ["Review failed"],
+            suggestions: ["Retry review"]
+        };
+    }
+};
+
+export interface OptimizedVideoResult {
+    prompt: string;
+    specs: {
+        duration?: string;
+        camera?: string;
+        lens?: string;
+        vfx?: string;
+    }
+}
+
+export const regenerateVideoPromptOptimized = async (
+    scene: Scene,
+    reviewResult: VisualReviewResult,
+    language: string = 'Chinese',
+    assets: Asset[] = [],
+    globalStyle?: GlobalStyle
+): Promise<OptimizedVideoResult> => {
+    // Pass globalStyle to ensure the input prompt has the style prefix
+    const currentPrompt = constructVideoPrompt(scene, globalStyle);
+    
+    // Build Asset Context
+    const activeAssets = assets.filter(a => scene.assetIds?.includes(a.id));
+    const assetContext = activeAssets.length > 0 
+        ? `\n**Active Assets (Characters/Items):**\n${activeAssets.map(a => `- ${a.name} (${a.type}): ${a.description}`).join('\n')}`
+        : "";
+
+    // Extract Style Prefix for explicit instruction
+    const stylePrefix = globalStyle?.visualTags ? `${globalStyle.visualTags}. ` : "";
+
+    const sysPrompt = `
+    You are a **Veo3 Video Prompt Expert**.
+    Goal: Rewrite the video prompt based on the Visual Master's review to make it perfect for Veo3 video generation.
+    Also, update the structured video specifications (duration, camera, lens, vfx) to match the optimized prompt.
+    
+    **Original Prompt:**
+    "${currentPrompt}"
+    ${assetContext}
+    
+    **Global Style Context:**
+    ${stylePrefix}
+    
+    **Current Specs (USER DEFINED - STRICT):**
+    Duration: ${scene.video_duration || '3s'}
+    Camera: ${scene.video_camera || 'Static'}
+    Lens: ${scene.video_lens || 'Standard'}
+    VFX: ${scene.video_vfx || 'None'}
+    
+    **Review Feedback:**
+    Risks: ${reviewResult.risks.join('; ')}
+    Suggestions: ${reviewResult.suggestions.join('; ')}
+    
+    **Instructions:**
+    1. Fix all issues mentioned in the review.
+    2. Optimize for Veo3 (${language} text, cinematic keywords, specific camera moves).
+    3. Ensure the prompt is under 800 characters.
+    4. Maintain the original core meaning of the scene.
+    5. **CRITICAL**: Integrate the visual descriptions of the Active Assets into the prompt naturally.
+    6. **CRITICAL**: If an asset was previously described but is NOT listed in **Active Assets** above, you MUST REMOVE its specific visual description from the prompt. The prompt must ONLY describe the assets listed in Active Assets (plus the general scene environment).
+    7. **STRICT FORMAT ENFORCEMENT**: The prompt MUST follow this exact structure:
+       \`[Style Prefix], [Camera & Lens], [Lighting & Atmosphere], [Subject & Action], [Environment], [Tech Specs]\`
+    8. **MANDATORY**: Start the prompt with the Global Style Prefix exactly: "${stylePrefix}".
+    9. **MANDATORY**: The [Camera & Lens] section MUST explicitly use the values from "Current Specs". If the spec says "28mm", the prompt MUST contain "28mm" or equivalent visual description. If there is a conflict between the original prompt and the specs, THE SPECS WIN.
+    10. **CRITICAL**: Update the video specs (duration, camera, lens, vfx) to be consistent with your new prompt.
+    
+    **Response Format (JSON Only):**
+    {
+      "prompt": "The optimized Veo3 prompt in ${language}...",
+      "specs": {
+        "duration": "e.g. 4s",
+        "camera": "e.g. Dolly In, Pan Right",
+        "lens": "e.g. 35mm, Macro",
+        "vfx": "e.g. Slow Motion, Particles"
+      }
+    }
+    `;
+    
+    try {
+        const response = await retryWithBackoff<GenerateContentResponse>(() => ai.models.generateContent({
+            model: 'gemini-3-flash-preview',
+            contents: { parts: [{ text: sysPrompt }] },
+            config: {
+                responseMimeType: "application/json"
+            }
+        }));
+        
+        const json = safeJsonParse<OptimizedVideoResult>(response.text, {
+            prompt: currentPrompt,
+            specs: {}
+        });
+
+        // Force prepend style prefix if missing (Double Safety)
+        if (stylePrefix && !json.prompt.startsWith(stylePrefix.trim())) {
+             // Check if it's already there but slightly different?
+             // Simple check: just prepend if not starts with.
+             json.prompt = `${stylePrefix}${json.prompt}`;
+        }
+
+        // --- FINAL SAFEGUARD: Force Override Specs in Prompt ---
+        // If the prompt still says "35mm" but spec says "32mm", we must fix it.
+        const lensSpec = scene.video_lens || "";
+        if (lensSpec) {
+             // Regex to find things like "35mm", "85mm lens", "50mm prime"
+             // We replace any "XXmm" that is NOT the spec with the spec
+             const lensRegex = /(\d+)mm/gi;
+             const targetLens = lensSpec.match(/(\d+)mm/i)?.[0]; // e.g. "32mm"
+
+             if (targetLens) {
+                 json.prompt = json.prompt.replace(lensRegex, (match) => {
+                     // If match is exactly what we want, keep it.
+                     if (match.toLowerCase() === targetLens.toLowerCase()) return match;
+                     // Otherwise replace
+                     return targetLens;
+                 });
+                 
+                 // If not found at all, append it? Maybe safer not to blindly append, 
+                 // but "Cinematic Shot: ..." usually works well with lens at the end or near "Cinematic".
+                 // Let's just trust the regex replacement for now to fix conflicts.
+             }
+        }
+
+        return json;
+    } catch (e) {
+        console.error("Video Prompt Regeneration Failed", e);
+        return { prompt: currentPrompt, specs: {} };
+    }
+};
+
+export const updateVideoPromptDirectly = async (
+    scene: Scene,
+    language: string = 'Chinese',
+    assets: Asset[] = [],
+    globalStyle?: GlobalStyle
+): Promise<OptimizedVideoResult> => {
+    // Pass globalStyle to ensure the input prompt has the style prefix
+    const currentPrompt = constructVideoPrompt(scene, globalStyle);
+    
+    // Build Asset Context
+    const activeAssets = assets.filter(a => scene.assetIds?.includes(a.id));
+    const assetContext = activeAssets.length > 0 
+        ? `\n**Active Assets (Characters/Items):**\n${activeAssets.map(a => `- ${a.name} (${a.type}): ${a.description}`).join('\n')}`
+        : "";
+
+    // Extract Style Prefix for explicit instruction
+    const stylePrefix = globalStyle?.visualTags ? `${globalStyle.visualTags}. ` : "";
+
+    const sysPrompt = `
+    You are a **Veo3 Video Prompt Expert**.
+    Goal: Update the video prompt to incorporate new assets or specifications.
+    
+    **Original Prompt:**
+    "${currentPrompt}"
+    ${assetContext}
+    
+    **Global Style Context:**
+    ${stylePrefix}
+    
+    **Current Specs (USER DEFINED - STRICT):**
+    Duration: ${scene.video_duration || '3s'}
+    Camera: ${scene.video_camera || 'Static'}
+    Lens: ${scene.video_lens || 'Standard'}
+    VFX: ${scene.video_vfx || 'None'}
+    
+    **Instructions:**
+    1. Update the prompt to reflect the Current Specs and Active Assets.
+    2. Optimize for Veo3 (${language} text, cinematic keywords, specific camera moves).
+    3. Ensure the prompt is under 800 characters.
+    4. Maintain the original core meaning of the scene.
+    5. **CRITICAL**: Integrate the visual descriptions of the Active Assets into the prompt naturally.
+    6. **CRITICAL**: If an asset was previously described but is NOT listed in **Active Assets** above, you MUST REMOVE its specific visual description from the prompt.
+    7. **STRICT FORMAT ENFORCEMENT**: The prompt MUST follow this exact structure:
+       \`[Style Prefix], [Camera & Lens], [Lighting & Atmosphere], [Subject & Action], [Environment], [Tech Specs]\`
+    8. **MANDATORY**: Start the prompt with the Global Style Prefix exactly: "${stylePrefix}".
+    9. **MANDATORY**: The [Camera & Lens] section MUST explicitly use the values from "Current Specs".
+    
+    **Response Format (JSON Only):**
+    {
+      "prompt": "The optimized Veo3 prompt in ${language}...",
+      "specs": {
+        "duration": "e.g. 4s",
+        "camera": "e.g. Dolly In, Pan Right",
+        "lens": "e.g. 35mm, Macro",
+        "vfx": "e.g. Slow Motion, Particles"
+      }
+    }
+    `;
+    
+    try {
+        const response = await retryWithBackoff<GenerateContentResponse>(() => ai.models.generateContent({
+            model: 'gemini-3-flash-preview',
+            contents: { parts: [{ text: sysPrompt }] },
+            config: {
+                responseMimeType: "application/json"
+            }
+        }));
+        
+        const json = safeJsonParse<OptimizedVideoResult>(response.text, {
+            prompt: currentPrompt,
+            specs: {}
+        });
+
+        if (stylePrefix && !json.prompt.startsWith(stylePrefix.trim())) {
+             json.prompt = `${stylePrefix}${json.prompt}`;
+        }
+        
+        // Fix Lens Spec Conflicts
+        const lensSpec = scene.video_lens || "";
+        if (lensSpec) {
+             const lensRegex = /(\d+)mm/gi;
+             const targetLens = lensSpec.match(/(\d+)mm/i)?.[0];
+             if (targetLens) {
+                 json.prompt = json.prompt.replace(lensRegex, (match) => {
+                     if (match.toLowerCase() === targetLens.toLowerCase()) return match;
+                     return targetLens;
+                 });
+             }
+        }
+
+        return json;
+    } catch (e) {
+        console.error("Video Prompt Direct Update Failed", e);
+        return { prompt: currentPrompt, specs: {} };
+    }
 };
