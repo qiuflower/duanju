@@ -29,7 +29,10 @@ export interface Scene {
   
   assetIds?: string[]; // IDs of assets appearing in this scene (Image Mode)
   videoAssetIds?: string[]; // IDs of assets used specifically for Video Mode (Independent from Image Mode)
+  startEndAssetIds?: string[]; // IDs for Start/End Frame Mode [StartID, EndID?]
   useAssets?: boolean; // Whether to use assets for video generation
+  isStartEndFrameMode?: boolean; // Whether to use Start/End Frame Mode (veo3.1-pro-4k)
+  video_prompt_backup?: string; // Backup of video prompt for Start/End Frame Mode undo
   visualReview?: VisualReviewResult; // New: Agent Visual Review Result
 }
 

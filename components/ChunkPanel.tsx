@@ -14,6 +14,7 @@ interface ChunkPanelProps {
   labels: Translation;
   onUpdateChunk: (id: string, updates: Partial<NovelChunk>) => void;
   onSceneUpdate: (chunkId: string, sceneId: string, updates: Partial<Scene>) => void;
+  onDuplicateScene: (chunkId: string, sceneId: string) => void;
   onExtract: (chunk: NovelChunk) => Promise<Asset[]>;
   onGenerateScript: (chunk: NovelChunk) => Promise<Scene[]>;
   onGenerateImage: (scene: Scene, chunkAssets?: Asset[]) => Promise<string>; // Updated signature
@@ -22,6 +23,7 @@ interface ChunkPanelProps {
   onToggle: () => void;
   autoShoot?: boolean;
   isLocked?: boolean;
+  flashSceneId?: string;
 }
 
 const ChunkPanel: React.FC<ChunkPanelProps> = ({
@@ -31,6 +33,7 @@ const ChunkPanel: React.FC<ChunkPanelProps> = ({
   labels,
   onUpdateChunk,
   onSceneUpdate,
+  onDuplicateScene,
   onExtract,
   onGenerateScript,
   onGenerateImage,
@@ -38,7 +41,8 @@ const ChunkPanel: React.FC<ChunkPanelProps> = ({
   isActive,
   onToggle,
   autoShoot = false,
-  isLocked = false
+  isLocked = false,
+  flashSceneId
 }) => {
   const [loadingStep, setLoadingStep] = useState<'none' | 'extracting' | 'scripting' | 'filming'>('none');
   const [generatingSceneIds, setGeneratingSceneIds] = useState<string[]>([]);
@@ -97,6 +101,10 @@ const ChunkPanel: React.FC<ChunkPanelProps> = ({
   const handleDeleteScene = (sceneId: string) => {
       const newScenes = chunk.scenes.filter(s => s.id !== sceneId);
       onUpdateChunk(chunk.id, { scenes: newScenes });
+  };
+  
+  const handleDuplicateScene = (sceneId: string) => {
+      onDuplicateScene(chunk.id, sceneId);
   };
 
   const handleShoot = async () => {
@@ -261,7 +269,7 @@ const ChunkPanel: React.FC<ChunkPanelProps> = ({
   };
 
   return (
-    <div className={`bg-dark-800 rounded-xl border overflow-hidden shadow-lg transition-all ${isActive ? 'border-banana-500/30 ring-1 ring-banana-500/20' : 'border-white/10'}`}>
+    <div className={`bg-dark-800 rounded-xl border overflow-hidden shadow-lg transition-all ${isActive ? 'border-banana-500/30 ring-1 ring-banana-500/20 w-[75%]' : 'border-white/10 w-full'}`}>
         
         {/* Header */}
         <div className={`p-4 flex items-center justify-between bg-white/5 cursor-pointer hover:bg-white/10 ${isLocked ? 'opacity-75' : ''}`} onClick={onToggle}>
@@ -385,6 +393,7 @@ const ChunkPanel: React.FC<ChunkPanelProps> = ({
                                 labels={labels}
                                 onUpdate={handleSceneUpdateWrapper}
                                 onDelete={handleDeleteScene}
+                                onDuplicate={handleDuplicateScene}
                                 isGeneratingExternal={generatingSceneIds.includes(scene.id)}
                                 onGenerateImageOverride={handleGenerateImageInternal}
                                 onImageGenerated={handleImageGenerated}
@@ -394,6 +403,7 @@ const ChunkPanel: React.FC<ChunkPanelProps> = ({
                                 assets={chunk.assets}
                                 onAddAsset={handleAddChunkAsset}
                                 language={language}
+                                flash={flashSceneId === scene.id}
                              />
                          ))}
                      </div>

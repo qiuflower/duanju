@@ -24,11 +24,23 @@ const DEFAULT_STYLES: Record<string, { directors: string[], works: string[], tex
   }
 };
 
+type HistoryAction =
+  | {
+      type: 'duplicate_scene';
+      chunkId: string;
+      insertIndex: number;
+      sceneId: string;
+      sceneSnapshot: Scene;
+    };
+
 const App: React.FC = () => {
   const [globalAssets, setGlobalAssets] = useState<Asset[]>([]);
   const [chunks, setChunks] = useState<NovelChunk[]>([]);
   const [activeChunkId, setActiveChunkId] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [flashScene, setFlashScene] = useState<{ chunkId: string; sceneId: string } | null>(null);
+  const undoStackRef = useRef<HistoryAction[]>([]);
+  const redoStackRef = useRef<HistoryAction[]>([]);
 
   // Sync expanded chunk with active chunk (e.g. when automation moves to next)
   useEffect(() => {
@@ -160,6 +172,178 @@ const App: React.FC = () => {
   const updateChunk = (id: string, updates: Partial<NovelChunk>) => {
       setChunks(prev => prev.map(c => c.id === id ? { ...c, ...updates } : c));
   };
+
+  const deepClone = <T,>(value: T): T => {
+      if (typeof globalThis.structuredClone === 'function') {
+          return globalThis.structuredClone(value);
+      }
+      return JSON.parse(JSON.stringify(value)) as T;
+  };
+
+  const ensureUniqueId = (desiredId: string, existingIds: Set<string>) => {
+      if (!existingIds.has(desiredId)) return desiredId;
+      let i = 2;
+      let candidate = `${desiredId}_${i}`;
+      while (existingIds.has(candidate)) {
+          i += 1;
+          candidate = `${desiredId}_${i}`;
+      }
+      return candidate;
+  };
+
+  const createDuplicateSceneId = (sourceId: string, existingIds: Set<string>) => {
+      return ensureUniqueId(`${sourceId}_copy`, existingIds);
+  };
+
+  const remapSelfAssetIds = (ids: string[] | undefined, oldSceneId: string, newSceneId: string) => {
+      if (!ids) return ids;
+      const oldSelfId = `scene_img_${oldSceneId}`;
+      const newSelfId = `scene_img_${newSceneId}`;
+      return ids.map(id => (id === oldSelfId ? newSelfId : id));
+  };
+
+  const triggerFlashScene = (chunkId: string, sceneId: string) => {
+      setFlashScene({ chunkId, sceneId });
+      window.setTimeout(() => {
+          setFlashScene(prev => (prev?.chunkId === chunkId && prev?.sceneId === sceneId ? null : prev));
+      }, 900);
+  };
+
+  const handleDuplicateScene = (chunkId: string, sceneId: string) => {
+      let nextAction: HistoryAction | null = null;
+      setChunks(prev =>
+          prev.map(chunk => {
+              if (chunk.id !== chunkId) return chunk;
+              const idx = chunk.scenes.findIndex(s => s.id === sceneId);
+              if (idx < 0) return chunk;
+
+              const existingIds = new Set<string>(chunk.scenes.map(s => s.id));
+              const sourceScene = chunk.scenes[idx];
+              const newSceneId = createDuplicateSceneId(sourceScene.id, existingIds);
+              const cloned = deepClone(sourceScene);
+              cloned.id = newSceneId;
+              cloned.assetIds = remapSelfAssetIds(cloned.assetIds, sourceScene.id, newSceneId);
+              cloned.videoAssetIds = remapSelfAssetIds(cloned.videoAssetIds, sourceScene.id, newSceneId);
+
+              nextAction = {
+                  type: 'duplicate_scene',
+                  chunkId,
+                  insertIndex: idx + 1,
+                  sceneId: newSceneId,
+                  sceneSnapshot: deepClone(cloned)
+              };
+
+              const newScenes = [...chunk.scenes.slice(0, idx + 1), cloned, ...chunk.scenes.slice(idx + 1)];
+              return { ...chunk, scenes: newScenes };
+          })
+      );
+      if (nextAction) {
+          undoStackRef.current.push(nextAction);
+          redoStackRef.current = [];
+          triggerFlashScene(nextAction.chunkId, nextAction.sceneId);
+      }
+  };
+
+  const undo = () => {
+      const action = undoStackRef.current.pop();
+      if (!action) return;
+
+      if (action.type === 'duplicate_scene') {
+          let removedScene: Scene | null = null;
+          setChunks(prev =>
+              prev.map(chunk => {
+                  if (chunk.id !== action.chunkId) return chunk;
+                  const idx = chunk.scenes.findIndex(s => s.id === action.sceneId);
+                  if (idx < 0) return chunk;
+                  removedScene = chunk.scenes[idx];
+                  const newScenes = [...chunk.scenes.slice(0, idx), ...chunk.scenes.slice(idx + 1)];
+                  return { ...chunk, scenes: newScenes };
+              })
+          );
+          if (removedScene) {
+              redoStackRef.current.push({ ...action, sceneSnapshot: deepClone(removedScene) });
+          } else {
+              redoStackRef.current.push(action);
+          }
+      }
+  };
+
+  const redo = () => {
+      const action = redoStackRef.current.pop();
+      if (!action) return;
+
+      if (action.type === 'duplicate_scene') {
+          let nextAction: HistoryAction | null = null;
+          setChunks(prev =>
+              prev.map(chunk => {
+                  if (chunk.id !== action.chunkId) return chunk;
+                  const existingIds = new Set<string>(chunk.scenes.map(s => s.id));
+                  const insertIndex = Math.min(Math.max(action.insertIndex, 0), chunk.scenes.length);
+
+                  const sceneToInsert = deepClone(action.sceneSnapshot);
+                  const desiredId = sceneToInsert.id;
+                  const finalId = ensureUniqueId(desiredId, existingIds);
+                  if (finalId !== desiredId) {
+                      sceneToInsert.id = finalId;
+                      sceneToInsert.assetIds = remapSelfAssetIds(sceneToInsert.assetIds, desiredId, finalId);
+                      sceneToInsert.videoAssetIds = remapSelfAssetIds(sceneToInsert.videoAssetIds, desiredId, finalId);
+                  }
+
+                  nextAction = {
+                      type: 'duplicate_scene',
+                      chunkId: action.chunkId,
+                      insertIndex,
+                      sceneId: sceneToInsert.id,
+                      sceneSnapshot: deepClone(sceneToInsert)
+                  };
+
+                  const newScenes = [
+                      ...chunk.scenes.slice(0, insertIndex),
+                      sceneToInsert,
+                      ...chunk.scenes.slice(insertIndex)
+                  ];
+                  return { ...chunk, scenes: newScenes };
+              })
+          );
+          if (nextAction) {
+              undoStackRef.current.push(nextAction);
+              triggerFlashScene(nextAction.chunkId, nextAction.sceneId);
+          } else {
+              undoStackRef.current.push(action);
+          }
+      }
+  };
+
+  useEffect(() => {
+      const onKeyDown = (e: KeyboardEvent) => {
+          const isModifier = e.ctrlKey || e.metaKey;
+          if (!isModifier) return;
+
+          const active = document.activeElement as HTMLElement | null;
+          const tag = active?.tagName?.toLowerCase();
+          const isEditing =
+              tag === 'input' ||
+              tag === 'textarea' ||
+              tag === 'select' ||
+              (active ? (active as any).isContentEditable === true : false);
+          if (isEditing) return;
+
+          const key = e.key.toLowerCase();
+          const isUndo = key === 'z' && !e.shiftKey;
+          const isRedo = (key === 'z' && e.shiftKey) || key === 'y';
+
+          if (isUndo) {
+              e.preventDefault();
+              undo();
+          } else if (isRedo) {
+              e.preventDefault();
+              redo();
+          }
+      };
+
+      window.addEventListener('keydown', onKeyDown);
+      return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
 
   // ---------------------------------------------------------------------------
   // AUTOMATION LOGIC
@@ -574,10 +758,10 @@ const App: React.FC = () => {
       </header>
 
       {/* Main Content */}
-      <main className="flex-1 max-w-7xl w-full mx-auto px-4 py-6 grid grid-cols-1 lg:grid-cols-12 gap-6 h-[calc(100vh-4rem)]">
+      <main className="flex-1 max-w-screen-2xl w-full mx-auto px-4 py-6 grid grid-cols-1 lg:grid-cols-12 gap-6 h-[calc(100vh-4rem)]">
         
         {/* Left: Settings Panel */}
-        <div className="lg:col-span-4 h-full lg:sticky lg:top-24 flex flex-col gap-4">
+        <div className="lg:col-span-3 h-full lg:sticky lg:top-24 flex flex-col gap-4">
           <InputPanel 
             onAnalyze={handleAnalyze} 
             onLoadNovel={handleLoadNovel}
@@ -602,7 +786,7 @@ const App: React.FC = () => {
         </div>
 
         {/* Right: Chunk Workflow Stream */}
-        <div className="lg:col-span-8 flex flex-col gap-4 pb-20 relative">
+        <div className="lg:col-span-9 flex flex-col gap-4 pb-20 relative">
           
            {chunks.length === 0 && (
              <div className="flex flex-col items-center justify-center h-full opacity-30 text-center p-8 border-2 border-dashed border-white/10 rounded-xl mt-10">
@@ -621,11 +805,13 @@ const App: React.FC = () => {
                   labels={t}
                   onUpdateChunk={updateChunk}
                   onSceneUpdate={handleSceneUpdate}
+                  onDuplicateScene={handleDuplicateScene}
                   onExtract={handleChunkExtract}
                   onGenerateScript={handleChunkScript}
                   onGenerateImage={handleGenerateImageWrapper}
                   language={language}
                   isActive={expandedId === chunk.id}
+                  flashSceneId={flashScene?.chunkId === chunk.id ? flashScene.sceneId : undefined}
                   onToggle={() => {
                       // Toggle expansion
                       setExpandedId(expandedId === chunk.id ? null : chunk.id);

@@ -500,65 +500,69 @@ export const generateVideo = async (
 
   // Smart Asset Matching
   let topAssets: Asset[] = [];
-
-  // Check if asset usage is disabled (Manual Override)
-  // If scene.useAssets is explicitly false, we ignore ALL external assets (except the scene image itself)
-  const useAssets = scene.useAssets !== false;
-
-  if (useAssets) {
-      // STRICT MODE: If videoAssetIds is defined (user manually managed video assets), 
-      // use EXACTLY those assets (filtered by availability of ref image).
-      // Special handling for Current Scene Image ID.
-      if (scene.videoAssetIds !== undefined) {
-          // 1. Regular Assets
-          topAssets = assets.filter(a => scene.videoAssetIds!.includes(a.id) && a.refImageUrl);
-          
-          // 2. Current Scene Image Check
-          // If the special ID for current scene is present, we must ensure it's included.
-          // Since it's not in the 'assets' array, we handle it in the imagesToSend construction.
-      } else {
-          // FALLBACK MODE: Use legacy smart matching (Agent B IDs + Prompt Matching)
-          const targetAssetIds = scene.assetIds || [];
-          const matchedAssets = matchAssetsToPrompt(scene.visual_desc, assets, targetAssetIds);
-          topAssets = matchedAssets.slice(0, 3);
-      }
-  } else {
-      // Asset Usage Disabled: Clear topAssets so only storyboard image is used
-      topAssets = [];
-  }
-  
-  // Prepare Images Array
   let imagesToSend: string[] = [];
-  
-  if (topAssets.length > 0) {
-      imagesToSend = topAssets.map(a => (a.refImageUrl || ""));
-  }
-
-  // Handle Special "Current Scene Image" ID if present in videoAssetIds
-  // We construct the ID based on scene.id to match frontend logic: `scene_img_${scene.id}`
   const currentSceneAssetId = `scene_img_${scene.id}`;
-  const shouldIncludeSceneImage = scene.videoAssetIds?.includes(currentSceneAssetId);
 
-  // If user explicitly selected the scene image OR (in fallback mode) we have space OR (useAssets is false)
-  // Note: If useAssets is false, we MUST include the storyboard image as the only reference.
-  if (shouldIncludeSceneImage || !useAssets) {
-      // Prepend or Append? Usually scene image is base, so maybe prepend.
-      // But order matters for VEO? Let's append to keep character consistency if any.
-      // Actually, if it's explicitly selected, it's already "in the list" concept.
-      // But since it wasn't in 'topAssets' (which comes from 'assets'), we add it now.
+  if (scene.isStartEndFrameMode) {
+      // --- START/END FRAME MODE ---
+      // Requirement: Start Frame is Scene Image. End Frame is Optional.
+      // We rely on startEndAssetIds to track the End Frame choice.
+      // startEndAssetIds[0] -> Start Frame (Should be currentSceneAssetId)
+      // startEndAssetIds[1] -> End Frame (Asset ID)
+      
+      // 1. Start Frame (Always Storyboard Image)
       imagesToSend.push(imageBase64);
-  } else if (scene.videoAssetIds === undefined && imagesToSend.length < 3) {
-      // Legacy Fallback: Fill with storyboard if we have fewer than 3 images
-      imagesToSend.push(imageBase64);
-  }
-  
-  // Final check: Ensure we send at least one image (Storyboard backup)
-  if (imagesToSend.length === 0) {
-      imagesToSend.push(imageBase64);
+
+      // 2. End Frame (If configured in startEndAssetIds)
+      const endFrameId = scene.startEndAssetIds?.[1];
+      if (endFrameId) {
+          const endAsset = assets.find(a => a.id === endFrameId);
+          if (endAsset && endAsset.refImageUrl) {
+              imagesToSend.push(endAsset.refImageUrl);
+          }
+      }
+
+  } else {
+      // --- STANDARD MODE (Reference Assets) ---
+      
+      // Check if asset usage is disabled (Manual Override)
+      const useAssets = scene.useAssets !== false;
+
+      if (useAssets) {
+          if (scene.videoAssetIds !== undefined) {
+              // 1. Regular Assets
+              topAssets = assets.filter(a => scene.videoAssetIds!.includes(a.id) && a.refImageUrl);
+          } else {
+              // FALLBACK MODE
+              const targetAssetIds = scene.assetIds || [];
+              const matchedAssets = matchAssetsToPrompt(scene.visual_desc, assets, targetAssetIds);
+              topAssets = matchedAssets.slice(0, 3);
+          }
+      } else {
+          topAssets = [];
+      }
+      
+      if (topAssets.length > 0) {
+          imagesToSend = topAssets.map(a => (a.refImageUrl || ""));
+      }
+
+      const shouldIncludeSceneImage = scene.videoAssetIds?.includes(currentSceneAssetId);
+
+      // Logic for including Storyboard Image in Standard Mode
+      if (shouldIncludeSceneImage || !useAssets) {
+          imagesToSend.push(imageBase64);
+      } else if (scene.videoAssetIds === undefined && imagesToSend.length < 3) {
+          imagesToSend.push(imageBase64);
+      }
+      
+      // Final check: Ensure we send at least one image
+      if (imagesToSend.length === 0) {
+          imagesToSend.push(imageBase64);
+      }
   }
 
   const baseUrl = "https://ai.t8star.cn";
-  const model = "veo3.1-components";
+  const model = scene.isStartEndFrameMode ? "veo3.1" : "veo3.1-components";
 
   // key：必须使用 VIDEO_API_KEY (Fallback to T8/Polo keys)
   const key = (process.env.VIDEO_API_KEY || process.env.T8_VIDEO_API_KEY || process.env.POLO_VIDEO_API_KEY || "").trim();
