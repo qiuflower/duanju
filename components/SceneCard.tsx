@@ -58,6 +58,16 @@ const SceneCard: React.FC<SceneCardProps> = ({
   const [promptGenLoading, setPromptGenLoading] = useState(false);
   const [videoPromptUpdating, setVideoPromptUpdating] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // Ref to track the latest image URL to avoid stale closure/prop issues during rapid interactions
+  const latestImageRef = useRef<string | null>(scene.imageUrl || null);
+  const lastSceneIdRef = useRef(scene.id);
+
+  // Clear local image ref immediately when scene ID changes to prevent cross-scene pollution
+  if (lastSceneIdRef.current !== scene.id) {
+      lastSceneIdRef.current = scene.id;
+      latestImageRef.current = null;
+  }
+
 
   const updateVideoPromptWithAssets = async (newAssetIds: string[], overrideAssets?: Asset[]) => {
       setVideoPromptUpdating(true);
@@ -242,8 +252,15 @@ const SceneCard: React.FC<SceneCardProps> = ({
       reader.onload = (e) => {
         const result = e.target?.result as string;
         if (result) {
+          latestImageRef.current = result; // Update ref immediately
           onUpdate(scene.id, 'imageUrl', result);
           setGenStatus(ImageGenStatus.COMPLETED);
+
+          // Force reset Start/End frame mode to ensure consistency immediately
+          if (scene.isStartEndFrameMode) {
+             const currentSceneImgId = `scene_img_${scene.id}`;
+             onUpdate(scene.id, 'startEndAssetIds', [currentSceneImgId]);
+          }
         }
       };
       reader.readAsDataURL(file);
@@ -253,6 +270,7 @@ const SceneCard: React.FC<SceneCardProps> = ({
   // Sync prop image/video url with local status
   useEffect(() => {
       if (scene.imageUrl) {
+          latestImageRef.current = scene.imageUrl;
           setGenStatus(ImageGenStatus.COMPLETED);
           
           // --- Auto-Populate Video Assets Logic ---
@@ -334,10 +352,11 @@ const SceneCard: React.FC<SceneCardProps> = ({
   };
 
   const handleGenerateVideo = async () => {
-    if (!scene.imageUrl) return; // Need image first
+    const imageToUse = latestImageRef.current || scene.imageUrl;
+    if (!imageToUse) return; // Need image first
     setVideoStatus(ImageGenStatus.GENERATING);
     try {
-      const url = await generateVideo(scene.imageUrl, scene, globalStyle.aspectRatio, useAssets ? assets : []);
+      const url = await generateVideo(imageToUse, scene, globalStyle.aspectRatio, useAssets ? assets : []);
       setVideoStatus(ImageGenStatus.COMPLETED);
       if (onVideoGenerated) {
           onVideoGenerated(scene.id, url);
@@ -400,12 +419,13 @@ const SceneCard: React.FC<SceneCardProps> = ({
   };
 
   const saveImage = async () => {
-      if (scene.imageUrl) {
+      const imageToSave = latestImageRef.current || scene.imageUrl;
+      if (imageToSave) {
           try {
-              let href = scene.imageUrl;
+              let href = imageToSave;
               // If it's not a data URL, fetch it as a blob to force download
-              if (!scene.imageUrl.startsWith('data:')) {
-                  const response = await fetch(scene.imageUrl);
+              if (!imageToSave.startsWith('data:')) {
+                  const response = await fetch(imageToSave);
                   const blob = await response.blob();
                   href = URL.createObjectURL(blob);
               }
@@ -418,14 +438,14 @@ const SceneCard: React.FC<SceneCardProps> = ({
               document.body.removeChild(link);
 
               // Cleanup blob URL if created
-              if (href !== scene.imageUrl) {
+              if (href !== imageToSave) {
                   URL.revokeObjectURL(href);
               }
           } catch (e) {
               console.error("Failed to download image", e);
               // Fallback to direct link
               const link = document.createElement('a');
-              link.href = scene.imageUrl;
+              link.href = imageToSave;
               link.download = `scene_${scene.id}.png`;
               link.target = "_blank";
               document.body.appendChild(link);
@@ -476,7 +496,7 @@ const SceneCard: React.FC<SceneCardProps> = ({
                             }
                         }
                         
-                        console.log(`Scene ${scene.id}: Start/End Frame Mode ${newValue ? 'Enabled' : 'Disabled'}`);
+                        //console.log(`Scene ${scene.id}: Start/End Frame Mode ${newValue ? 'Enabled' : 'Disabled'}`);
                     }}
                     className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium transition-all backdrop-blur-sm ${
                         scene.isStartEndFrameMode 

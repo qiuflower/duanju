@@ -269,7 +269,7 @@ const ChunkPanel: React.FC<ChunkPanelProps> = ({
   };
 
   return (
-    <div className={`bg-dark-800 rounded-xl border overflow-hidden shadow-lg transition-all ${isActive ? 'border-banana-500/30 ring-1 ring-banana-500/20 w-[75%]' : 'border-white/10 w-full'}`}>
+    <div className={`bg-dark-800 rounded-xl border overflow-hidden shadow-lg transition-all duration-300 ease-in-out w-[75%] ${isActive ? 'border-banana-500/30 ring-1 ring-banana-500/20' : 'border-white/10'}`}>
         
         {/* Header */}
         <div className={`p-4 flex items-center justify-between bg-white/5 cursor-pointer hover:bg-white/10 ${isLocked ? 'opacity-75' : ''}`} onClick={onToggle}>
