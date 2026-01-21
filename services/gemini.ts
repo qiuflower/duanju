@@ -1,6 +1,7 @@
 //import { GoogleGenAI, Type, GenerateContentResponse, Modality } from "@google/genai";
 import { Scene, Asset, GlobalStyle, ContentPart, GenerateContentResponse, VideosOperation, VisualReviewResult } from "../types";
 import { modelManager as ai } from "./ai/model-manager";
+import { saveAsset, loadAssetBase64 } from "./storage";
 // --- Lightweight shims to replace @google/genai types/enums ---
 
 
@@ -283,7 +284,7 @@ export const generateVideo = async (
   aspectRatio: '16:9' | '9:16' = '16:9',
   assets: Asset[] = [],
   globalStyle?: GlobalStyle
-): Promise<string> => {
+): Promise<{ url: string; assetId: string }> => {
   // Use helper to get prompt (with style injection)
   const fullPrompt = constructVideoPrompt(scene, globalStyle);
   const safePrompt = fullPrompt.substring(0, 800);
@@ -310,8 +311,12 @@ export const generateVideo = async (
       const endFrameId = scene.startEndAssetIds?.[1];
       if (endFrameId) {
           const endAsset = assets.find(a => a.id === endFrameId);
-          if (endAsset && endAsset.refImageUrl) {
-              imagesToSend.push(endAsset.refImageUrl);
+          if (endAsset) {
+              let url = endAsset.refImageUrl;
+              if (!url && endAsset.refImageAssetId) {
+                  url = await loadAssetBase64(endAsset.refImageAssetId) || undefined;
+              }
+              if (url) imagesToSend.push(url);
           }
       }
 
@@ -465,19 +470,11 @@ export const generateVideo = async (
           if (!videoResponse.ok) throw new Error(`Failed to download video: ${videoResponse.statusText}`);
 
           const videoBlob = await videoResponse.blob();
-          // Convert to Base64 Data URL for persistence
-          return new Promise<string>((resolve, reject) => {
-              const reader = new FileReader();
-              reader.onloadend = () => {
-                  if (typeof reader.result === 'string') {
-                      resolve(reader.result);
-                  } else {
-                      reject(new Error("Failed to convert video to base64"));
-                  }
-              };
-              reader.onerror = reject;
-              reader.readAsDataURL(videoBlob);
-          });
+          
+          // Optimized: Store Blob in IndexedDB and return ObjectURL
+          const assetId = await saveAsset(videoBlob);
+          const url = URL.createObjectURL(videoBlob);
+          return { url, assetId };
       }
 
       // IN_PROGRESS
@@ -1297,7 +1294,7 @@ export const analyzeNovelText = async (
             }
         });
       }
-      console.log(`[Gemini] Merging prompt: ${stylePrefix} + ${finalNpPrompt}`);
+      //console.log(`[Gemini] Merging prompt: ${stylePrefix} + ${finalNpPrompt}`);
       
       // New format: Style Prefix + Content
       finalNpPrompt = `${stylePrefix}, ${finalNpPrompt}`;
@@ -1370,20 +1367,29 @@ export const generateSceneImage = async (
     let usedAssets: Asset[] = [];
     
     if (sceneAssetIds && sceneAssetIds.length > 0) {
-        usedAssets = assets.filter(a => sceneAssetIds.includes(a.id) && a.refImageUrl);
+        usedAssets = assets.filter(a => sceneAssetIds.includes(a.id) && (a.refImageUrl || a.refImageAssetId));
     } else {
         // Fallback: Name matching
-        usedAssets = assets.filter(a => a.refImageUrl && prompt.includes(a.name));
+        usedAssets = assets.filter(a => (a.refImageUrl || a.refImageAssetId) && prompt.includes(a.name));
     }
 
     // Limit to 3 to avoid token/complexity issues
     usedAssets = usedAssets.slice(0, 3);
 
+    // Resolve assets
+    const resolvedUsedAssets = await Promise.all(usedAssets.map(async a => {
+        let url = a.refImageUrl;
+        if (!url && a.refImageAssetId) {
+            url = await loadAssetBase64(a.refImageAssetId) || undefined;
+        }
+        return { ...a, refImageUrl: url };
+    }));
+
     // 2. Build Multi-modal Request Parts
     const parts: any[] = [];
     let instructions = "";
 
-    usedAssets.forEach((asset, index) => {
+    resolvedUsedAssets.forEach((asset, index) => {
         if (asset.refImageUrl) {
             const cleanBase64 = asset.refImageUrl.replace(/^data:image\/(png|jpeg|jpg);base64,/, "");
             parts.push({

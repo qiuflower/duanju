@@ -2,11 +2,12 @@ import React, { useState, useEffect, useRef } from 'react';
 import { AnalysisStatus, Scene, Asset, GlobalStyle, NovelChunk } from './types';
 import { analyzeNovelText, extractAssets, generateSceneImage } from './services/gemini';
 import { translations } from './translations';
-import { saveState, loadState, clearState } from './services/storage';
+import { saveState, loadState, clearState, loadAssetUrl, saveAsset } from './services/storage';
 import InputPanel from './components/InputPanel';
 import ChunkPanel from './components/ChunkPanel';
 import ModelSelector from './components/ModelSelector';
-import { Film, AlertCircle, Globe, Video, Book, Trash2, PlayCircle, PauseCircle } from 'lucide-react';
+import { Film, AlertCircle, Globe, Video, Book, Trash2, PlayCircle, PauseCircle, Upload } from 'lucide-react';
+import JSZip from 'jszip';
 
 const CHUNK_SIZE = 5000; 
 const STATE_KEY = 'storyboarder_session';
@@ -89,18 +90,50 @@ const App: React.FC = () => {
         try {
             const savedState = await loadState(STATE_KEY);
             if (savedState) {
-                if (savedState.globalAssets) setGlobalAssets(savedState.globalAssets);
-                if (savedState.chunks) {
-                    // Sanitize chunks: Remove blob URLs that are invalid after reload
-                    const sanitizedChunks = savedState.chunks.map((chunk: NovelChunk) => ({
-                        ...chunk,
-                        scenes: chunk.scenes.map((scene: Scene) => ({
-                            ...scene,
-                            videoUrl: scene.videoUrl?.startsWith('blob:') ? undefined : scene.videoUrl,
-                            narrationAudioUrl: scene.narrationAudioUrl?.startsWith('blob:') ? undefined : scene.narrationAudioUrl
-                        }))
+                if (savedState.globalAssets) {
+                    const hydratedAssets = await Promise.all(savedState.globalAssets.map(async (asset: Asset) => {
+                         if (asset.refImageAssetId) {
+                             const url = await loadAssetUrl(asset.refImageAssetId);
+                             if (url) return { ...asset, refImageUrl: url };
+                         }
+                         return asset;
                     }));
-                    setChunks(sanitizedChunks);
+                    setGlobalAssets(hydratedAssets);
+                }
+                if (savedState.chunks) {
+                    // Hydrate chunks: Metadata only. Assets are loaded lazily by components.
+                    const hydratedChunks = savedState.chunks.map((chunk: NovelChunk) => ({
+                        ...chunk,
+                        // Assets: Don't load Blob URLs eagerly.
+                        assets: chunk.assets.map((asset: Asset) => ({
+                             ...asset,
+                             refImageUrl: asset.refImageUrl?.startsWith('blob:') ? undefined : asset.refImageUrl
+                        })),
+                        scenes: chunk.scenes.map((scene: Scene) => {
+                            // Scene Media: Don't load Blob URLs eagerly.
+                            // If we have an assetId, we rely on the component to load it via LazyMedia/useAssetUrl.
+                            
+                            let newVideoUrl = scene.videoUrl;
+                            let newImageUrl = scene.imageUrl;
+                            
+                            // If it was a blob URL, clear it (it's dead after reload).
+                            // We rely on videoAssetId/imageAssetId.
+                            if (newVideoUrl?.startsWith('blob:')) {
+                                newVideoUrl = undefined;
+                            }
+                            if (newImageUrl?.startsWith('blob:')) {
+                                newImageUrl = undefined;
+                            }
+                            
+                            return {
+                                ...scene,
+                                videoUrl: newVideoUrl,
+                                imageUrl: newImageUrl,
+                                narrationAudioUrl: scene.narrationAudioUrl?.startsWith('blob:') ? undefined : scene.narrationAudioUrl
+                            };
+                        })
+                    }));
+                    setChunks(hydratedChunks);
                 }
                 if (savedState.globalStyle) setGlobalStyle(savedState.globalStyle);
                 if (savedState.language) setLanguage(savedState.language);
@@ -592,6 +625,128 @@ const App: React.FC = () => {
      }
   };
 
+  const handleImportChunk = async (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+
+      try {
+          const zip = await JSZip.loadAsync(file);
+          
+          // 1. Read Metadata
+          const dataFile = zip.file("data.json");
+          if (!dataFile) throw new Error("Invalid format: data.json missing");
+          
+          const jsonStr = await dataFile.async("string");
+          const importedData = JSON.parse(jsonStr);
+          
+          // Validate structure
+          if (!importedData.scenes || !importedData.text) throw new Error("Invalid chunk data");
+
+          const newChunk: NovelChunk = {
+              ...importedData,
+              id: `chunk_${Date.now()}_import`, // Generate new ID to avoid conflict
+              // Status inference logic
+              status: 'scripted', 
+          };
+
+          // 2. Restore Assets (Characters/Locations)
+          const restoredAssets: Asset[] = [];
+          for (const asset of (importedData.assets || [])) {
+              let refImageUrl = asset.refImageUrl;
+              let refImageAssetId = asset.refImageAssetId;
+
+              // Check for image in zip
+              // Handle both potential naming conventions if needed, currently we use id_name.png
+              const imgFile = zip.file(`asset_refs/${asset.id}_${asset.name}.png`);
+              if (imgFile) {
+                  const blob = await imgFile.async("blob");
+                  refImageAssetId = await saveAsset(blob);
+                  const url = await loadAssetUrl(refImageAssetId);
+                  if (url) refImageUrl = url;
+              }
+
+              restoredAssets.push({
+                  ...asset,
+                  refImageUrl,
+                  refImageAssetId
+              });
+          }
+          newChunk.assets = restoredAssets;
+
+          // Merge assets into global assets (avoid duplicates by ID)
+          setGlobalAssets(prev => {
+              const next = [...prev];
+              restoredAssets.forEach(a => {
+                  if (!next.some(existing => existing.id === a.id)) {
+                      next.push(a);
+                  }
+              });
+              return next;
+          });
+
+          // 3. Restore Scenes
+          const restoredScenes: Scene[] = [];
+          for (const scene of (importedData.scenes || [])) {
+              let imageUrl = scene.imageUrl;
+              let imageAssetId = scene.imageAssetId;
+              let videoUrl = scene.videoUrl;
+              let videoAssetId = scene.videoAssetId;
+              let narrationAudioUrl = scene.narrationAudioUrl;
+
+              // Image
+              const imgFile = zip.file(`images/${scene.id}.png`);
+              if (imgFile) {
+                  const blob = await imgFile.async("blob");
+                  imageAssetId = await saveAsset(blob);
+                  const url = await loadAssetUrl(imageAssetId);
+                  if (url) imageUrl = url;
+              }
+
+              // Video
+              const vidFile = zip.file(`videos/${scene.id}.mp4`);
+              if (vidFile) {
+                  const blob = await vidFile.async("blob");
+                  videoAssetId = await saveAsset(blob);
+                  const url = await loadAssetUrl(videoAssetId);
+                  if (url) videoUrl = url;
+              }
+
+              // Audio
+              const audioFile = zip.file(`narration/${scene.id}_narration.wav`);
+              if (audioFile) {
+                  const blob = await audioFile.async("blob");
+                  narrationAudioUrl = URL.createObjectURL(blob);
+              }
+
+              restoredScenes.push({
+                  ...scene,
+                  imageUrl,
+                  imageAssetId,
+                  videoUrl,
+                  videoAssetId,
+                  narrationAudioUrl
+              });
+          }
+          newChunk.scenes = restoredScenes;
+          
+          // Determine status more accurately
+          if (newChunk.scenes.length > 0) {
+             if (newChunk.scenes.every(s => !!s.videoUrl || !!s.videoAssetId)) newChunk.status = 'completed';
+             else if (newChunk.scenes.every(s => !!s.imageUrl || !!s.imageAssetId)) newChunk.status = 'shooting';
+          }
+
+          // Add to chunks
+          setChunks(prev => [...prev, newChunk]);
+
+      } catch (err: any) {
+          console.error("Import failed", err);
+          alert((language === 'Chinese' ? "导入失败: " : "Import Failed: ") + err.message);
+      } finally {
+          // Reset input
+          e.target.value = '';
+      }
+  };
+
   const handleAnalyze = async (manualText: string) => {
      handleLoadNovel(manualText, "Manual Input");
   };
@@ -670,6 +825,15 @@ const App: React.FC = () => {
       }
   };
 
+  const handleDeleteChunk = (chunkId: string) => {
+      if (confirm(t.confirmDeleteChunk)) {
+          setChunks(prev => prev.filter(c => c.id !== chunkId));
+          // If the deleted chunk was active, reset active/expanded states
+          if (activeChunkId === chunkId) setActiveChunkId(null);
+          if (expandedId === chunkId) setExpandedId(null);
+      }
+  };
+
   return (
     <div className="min-h-screen bg-dark-900 text-gray-100 flex flex-col font-sans selection:bg-banana-500/30">
       
@@ -744,6 +908,13 @@ const App: React.FC = () => {
              <ModelSelector />
 
              <div className="flex items-center gap-2 bg-black/20 px-3 py-1.5 rounded-full border border-white/5 hover:border-banana-500/30 transition-colors">
+                <label className="cursor-pointer flex items-center gap-2 text-gray-400 hover:text-banana-400 transition-colors" title={language === 'Chinese' ? "导入章节片段 (ZIP)" : "Import Chunk (ZIP)"}>
+                    <Upload className="w-4 h-4" />
+                    <input type="file" accept=".zip" className="hidden" onChange={handleImportChunk} />
+                </label>
+             </div>
+
+             <div className="flex items-center gap-2 bg-black/20 px-3 py-1.5 rounded-full border border-white/5 hover:border-banana-500/30 transition-colors">
                 <Globe className="w-3.5 h-3.5 text-banana-400" />
                 <select 
                   value={language} 
@@ -810,6 +981,7 @@ const App: React.FC = () => {
                   styleState={globalStyle}
                   labels={t}
                   onUpdateChunk={updateChunk}
+                  onDeleteChunk={handleDeleteChunk}
                   onSceneUpdate={handleSceneUpdate}
                   onDuplicateScene={handleDuplicateScene}
                   onExtract={handleChunkExtract}

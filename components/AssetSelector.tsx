@@ -1,6 +1,7 @@
 import React, { useRef } from 'react';
 import { Asset } from '../types';
 import { X, Search, Upload } from 'lucide-react';
+import { LazyMedia } from './LazyMedia';
 
 interface AssetSelectorProps {
   assets: Asset[];
@@ -178,8 +179,15 @@ export const AssetSelector: React.FC<AssetSelectorProps> = ({ assets, onSelect, 
                         : 'border-white/5 hover:border-banana-500/50 hover:scale-[1.02]'
                     }`}
                 >
-                    {asset.refImageUrl ? (
-                        <img src={asset.refImageUrl} alt={asset.name} className="w-full h-full object-cover" />
+                    {asset.refImageUrl || asset.refImageAssetId ? (
+                        <LazyMedia
+                            assetId={asset.refImageAssetId}
+                            fallbackUrl={asset.refImageUrl}
+                            type="image"
+                            alt={asset.name}
+                            className="w-full h-full"
+                            imgClassName="w-full h-full object-cover"
+                        />
                     ) : (
                         <div className="w-full h-full bg-white/5 flex items-center justify-center text-gray-500 text-xs">
                             No Image

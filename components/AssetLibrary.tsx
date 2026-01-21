@@ -1,6 +1,7 @@
 import React, { useState, useRef } from 'react';
 import { Asset, GlobalStyle } from '../types';
 import { Translation } from '../translations';
+import { LazyMedia } from './LazyMedia';
 import { User, MapPin, Package, Plus, Trash2, Wand2, Image as ImageIcon, Camera, GitBranch, RefreshCw, Download, ChevronRight, CornerDownRight, Upload, Copy, Pause } from 'lucide-react';
 import { generateAssetImage } from '../services/gemini';
 
@@ -85,7 +86,11 @@ const AssetLibrary: React.FC<AssetLibraryProps> = ({
       try {
         // Find parent reference image for consistency
         const parentAsset = asset.parentId ? assets.find(a => a.id === asset.parentId) : undefined;
-        const referenceImage = parentAsset?.refImageUrl;
+        let referenceImage = parentAsset?.refImageUrl;
+        if (!referenceImage && parentAsset?.refImageAssetId) {
+             const { loadAssetUrl } = await import('../services/storage');
+             referenceImage = await loadAssetUrl(parentAsset.refImageAssetId) || undefined;
+        }
 
         const { imageUrl, prompt } = await generateAssetImage(asset, currentStyle, overridePrompt, referenceImage);
         onUpdateAsset({ ...asset, refImageUrl: imageUrl, prompt });
@@ -106,7 +111,7 @@ const AssetLibrary: React.FC<AssetLibraryProps> = ({
           return;
       }
 
-      const missing = assets.filter(a => !a.refImageUrl && a.description);
+      const missing = assets.filter(a => !a.refImageUrl && !a.refImageAssetId && a.description);
       if (missing.length === 0) {
           if (onBatchComplete && !stopBatchRef.current) {
              onBatchComplete();
@@ -132,7 +137,11 @@ const AssetLibrary: React.FC<AssetLibraryProps> = ({
           });
           try {
               const parentAsset = asset.parentId ? assets.find(a => a.id === asset.parentId) : undefined;
-              const referenceImage = parentAsset?.refImageUrl;
+              let referenceImage = parentAsset?.refImageUrl;
+              if (!referenceImage && parentAsset?.refImageAssetId) {
+                 const { loadAssetUrl } = await import('../services/storage');
+                 referenceImage = await loadAssetUrl(parentAsset.refImageAssetId) || undefined;
+              }
 
               const { imageUrl, prompt } = await generateAssetImage(asset, currentStyle, undefined, referenceImage);
               onUpdateAsset({ ...asset, refImageUrl: imageUrl, prompt });
@@ -166,12 +175,21 @@ const AssetLibrary: React.FC<AssetLibraryProps> = ({
       }
   };
 
-  const handleSaveImage = async (url: string, name: string) => {
+  const handleSaveImage = async (url: string, name: string, assetId?: string) => {
       try {
           let href = url;
+          // If no URL but assetId exists, load it
+          if (!href && assetId) {
+              const { loadAssetUrl } = await import('../services/storage');
+              const loaded = await loadAssetUrl(assetId);
+              if (loaded) href = loaded;
+          }
+
+          if (!href) return;
+
           // If it's not a data URL, fetch it as a blob to force download
-          if (!url.startsWith('data:')) {
-              const response = await fetch(url);
+          if (!href.startsWith('data:')) {
+              const response = await fetch(href);
               const blob = await response.blob();
               href = URL.createObjectURL(blob);
           }
@@ -189,14 +207,16 @@ const AssetLibrary: React.FC<AssetLibraryProps> = ({
           }
       } catch (e) {
           console.error("Failed to download asset image", e);
-          // Fallback
-          const link = document.createElement('a');
-          link.href = url;
-          link.download = `asset_${name}.png`;
-          link.target = "_blank";
-          document.body.appendChild(link);
-          link.click();
-          document.body.removeChild(link);
+          // Fallback if href is valid
+          if (url) {
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = `asset_${name}.png`;
+            link.target = "_blank";
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+          }
       }
   };
 
@@ -241,12 +261,19 @@ const AssetLibrary: React.FC<AssetLibraryProps> = ({
 
                 <div className="shrink-0 flex flex-col items-center gap-2">
                     <div className="w-16 h-16 bg-black/40 rounded border border-white/5 flex items-center justify-center overflow-hidden relative group/img cursor-pointer">
-                        {asset.refImageUrl ? (
+                        {(asset.refImageUrl || asset.refImageAssetId) ? (
                             <>
-                                <img src={asset.refImageUrl} alt={asset.name} className="w-full h-full object-cover" />
+                                <LazyMedia 
+                                    assetId={asset.refImageAssetId}
+                                    fallbackUrl={asset.refImageUrl}
+                                    type="image"
+                                    alt={asset.name}
+                                    className="w-full h-full"
+                                    imgClassName="w-full h-full object-cover"
+                                />
                                 <div className="absolute inset-0 bg-black/60 flex items-center justify-center gap-1 opacity-0 group-hover/img:opacity-100 transition-opacity">
                                     <button disabled={generatingIds.has(asset.id)} onClick={(e) => { e.stopPropagation(); handleGenMetaImage(asset, asset.prompt); }} title={labels.regenerate} className="p-1 hover:text-banana-400 text-white disabled:opacity-50 disabled:cursor-not-allowed"><RefreshCw className="w-3 h-3" /></button>
-                                    <button onClick={(e) => { e.stopPropagation(); handleSaveImage(asset.refImageUrl!, asset.name); }} title={labels.saveImage} className="p-1 hover:text-banana-400 text-white"><Download className="w-3 h-3" /></button>
+                                    <button onClick={(e) => { e.stopPropagation(); handleSaveImage(asset.refImageUrl!, asset.name, asset.refImageAssetId); }} title={labels.saveImage} className="p-1 hover:text-banana-400 text-white"><Download className="w-3 h-3" /></button>
                                 </div>
                             </>
                         ) : (

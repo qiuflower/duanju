@@ -1,21 +1,54 @@
 
 const DB_NAME = 'NanobananaStoryboarderDB';
 const STORE_NAME = 'AppState';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 
-export const saveState = async (key: string, value: any) => {
-  return new Promise<void>((resolve, reject) => {
+let dbInstance: IDBDatabase | null = null;
+let dbRequest: Promise<IDBDatabase> | null = null;
+
+const getDB = (): Promise<IDBDatabase> => {
+  if (dbInstance) return Promise.resolve(dbInstance);
+  if (dbRequest) return dbRequest;
+
+  dbRequest = new Promise((resolve, reject) => {
     const request = indexedDB.open(DB_NAME, DB_VERSION);
-    
+
     request.onupgradeneeded = (event) => {
       const db = (event.target as IDBOpenDBRequest).result;
       if (!db.objectStoreNames.contains(STORE_NAME)) {
         db.createObjectStore(STORE_NAME);
       }
+      if (!db.objectStoreNames.contains('Assets')) {
+        db.createObjectStore('Assets');
+      }
     };
 
     request.onsuccess = (event) => {
       const db = (event.target as IDBOpenDBRequest).result;
+      dbInstance = db;
+      
+      // Handle connection closing (e.g. from another tab or browser)
+      db.onclose = () => {
+        dbInstance = null;
+        dbRequest = null;
+      };
+      
+      resolve(db);
+    };
+
+    request.onerror = () => {
+      dbRequest = null;
+      reject(request.error);
+    };
+  });
+
+  return dbRequest;
+};
+
+export const saveState = async (key: string, value: any) => {
+  try {
+    const db = await getDB();
+    return new Promise<void>((resolve, reject) => {
       try {
         const transaction = db.transaction(STORE_NAME, 'readwrite');
         const store = transaction.objectStore(STORE_NAME);
@@ -23,27 +56,114 @@ export const saveState = async (key: string, value: any) => {
         transaction.oncomplete = () => resolve();
         transaction.onerror = () => reject(transaction.error);
       } catch (e) {
-          reject(e);
+        reject(e);
       }
-    };
+    });
+  } catch (e) {
+    throw e;
+  }
+};
 
-    request.onerror = () => reject(request.error);
-  });
+export const saveAsset = async (blob: Blob): Promise<string> => {
+  // Polyfill for crypto.randomUUID in insecure contexts (e.g. HTTP on LAN)
+  const generateUUID = () => {
+    if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+      return crypto.randomUUID();
+    }
+    // Simple manual UUID v4 generator
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+      const r = Math.random() * 16 | 0;
+      const v = c === 'x' ? r : (r & 0x3 | 0x8);
+      return v.toString(16);
+    });
+  };
+
+  const assetId = generateUUID();
+  try {
+    const db = await getDB();
+    return new Promise<string>((resolve, reject) => {
+      try {
+        const transaction = db.transaction('Assets', 'readwrite');
+        const store = transaction.objectStore('Assets');
+        store.put(blob, assetId);
+        transaction.oncomplete = () => resolve(assetId);
+        transaction.onerror = () => reject(transaction.error);
+      } catch (e) {
+        reject(e);
+      }
+    });
+  } catch (e) {
+    throw e;
+  }
+};
+
+export const loadAssetUrl = async (assetId: string): Promise<string | null> => {
+  try {
+    const db = await getDB();
+    return new Promise<string | null>((resolve, reject) => {
+      try {
+        const transaction = db.transaction('Assets', 'readonly');
+        const store = transaction.objectStore('Assets');
+        const request = store.get(assetId);
+        request.onsuccess = () => {
+          const blob = request.result;
+          if (blob instanceof Blob) {
+            resolve(URL.createObjectURL(blob));
+          } else {
+            resolve(null);
+          }
+        };
+        request.onerror = () => reject(request.error);
+      } catch (e) {
+        reject(e);
+      }
+    });
+  } catch (e) {
+    console.error("Failed to load asset URL", e);
+    return null;
+  }
+};
+
+export const loadAssetBase64 = async (assetId: string): Promise<string | null> => {
+  try {
+    const db = await getDB();
+    return new Promise<string | null>((resolve, reject) => {
+      try {
+        const transaction = db.transaction('Assets', 'readonly');
+        const store = transaction.objectStore('Assets');
+        const request = store.get(assetId);
+        request.onsuccess = () => {
+          const blob = request.result;
+          if (blob instanceof Blob) {
+            const reader = new FileReader();
+            reader.onloadend = () => {
+              if (typeof reader.result === 'string') {
+                resolve(reader.result);
+              } else {
+                resolve(null);
+              }
+            };
+            reader.onerror = () => reject(reader.error);
+            reader.readAsDataURL(blob);
+          } else {
+            resolve(null);
+          }
+        };
+        request.onerror = () => reject(request.error);
+      } catch (e) {
+        reject(e);
+      }
+    });
+  } catch (e) {
+    console.error("Failed to load asset Base64", e);
+    return null;
+  }
 };
 
 export const loadState = async (key: string) => {
-  return new Promise<any>((resolve, reject) => {
-    const request = indexedDB.open(DB_NAME, DB_VERSION);
-    
-    request.onupgradeneeded = (event) => {
-        const db = (event.target as IDBOpenDBRequest).result;
-        if (!db.objectStoreNames.contains(STORE_NAME)) {
-            db.createObjectStore(STORE_NAME);
-        }
-    };
-
-    request.onsuccess = (event) => {
-      const db = (event.target as IDBOpenDBRequest).result;
+  try {
+    const db = await getDB();
+    return new Promise<any>((resolve, reject) => {
       try {
         const transaction = db.transaction(STORE_NAME, 'readonly');
         const store = transaction.objectStore(STORE_NAME);
@@ -53,28 +173,27 @@ export const loadState = async (key: string) => {
       } catch (e) {
         reject(e);
       }
-    };
-
-    request.onerror = () => reject(request.error);
-  });
+    });
+  } catch (e) {
+    throw e;
+  }
 };
 
 export const clearState = async (key: string) => {
+  try {
+    const db = await getDB();
     return new Promise<void>((resolve, reject) => {
-        const request = indexedDB.open(DB_NAME, DB_VERSION);
-        
-        request.onsuccess = (event) => {
-            const db = (event.target as IDBOpenDBRequest).result;
-            try {
-                const transaction = db.transaction(STORE_NAME, 'readwrite');
-                const store = transaction.objectStore(STORE_NAME);
-                store.delete(key);
-                transaction.oncomplete = () => resolve();
-                transaction.onerror = () => reject(transaction.error);
-            } catch (e) {
-                reject(e);
-            }
-        };
-        request.onerror = () => reject(request.error);
+      try {
+        const transaction = db.transaction(STORE_NAME, 'readwrite');
+        const store = transaction.objectStore(STORE_NAME);
+        store.delete(key);
+        transaction.oncomplete = () => resolve();
+        transaction.onerror = () => reject(transaction.error);
+      } catch (e) {
+        reject(e);
+      }
     });
+  } catch (e) {
+    throw e;
+  }
 };

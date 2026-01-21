@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { NovelChunk, Asset, GlobalStyle, Scene } from '../types';
 import { Translation } from '../translations';
-import { ChevronDown, ChevronRight, Wand2, FileText, Video, Download, CheckCircle, Loader2, Film, AlertTriangle, AlertCircle } from 'lucide-react';
+import { ChevronDown, ChevronRight, Wand2, FileText, Video, Download, CheckCircle, Loader2, Film, AlertTriangle, AlertCircle, Trash2 } from 'lucide-react';
 import SceneCard from './SceneCard';
 import JSZip from 'jszip';
 import saveAs from 'file-saver';
@@ -13,6 +13,7 @@ interface ChunkPanelProps {
   styleState: GlobalStyle;
   labels: Translation;
   onUpdateChunk: (id: string, updates: Partial<NovelChunk>) => void;
+  onDeleteChunk: (id: string) => void;
   onSceneUpdate: (chunkId: string, sceneId: string, updates: Partial<Scene>) => void;
   onDuplicateScene: (chunkId: string, sceneId: string) => void;
   onExtract: (chunk: NovelChunk) => Promise<Asset[]>;
@@ -32,6 +33,7 @@ const ChunkPanel: React.FC<ChunkPanelProps> = ({
   styleState,
   labels,
   onUpdateChunk,
+  onDeleteChunk,
   onSceneUpdate,
   onDuplicateScene,
   onExtract,
@@ -47,6 +49,7 @@ const ChunkPanel: React.FC<ChunkPanelProps> = ({
   const [loadingStep, setLoadingStep] = useState<'none' | 'extracting' | 'scripting' | 'filming'>('none');
   const [generatingSceneIds, setGeneratingSceneIds] = useState<string[]>([]);
   const [scriptError, setScriptError] = useState<string | null>(null);
+  const [exportProgress, setExportProgress] = useState<number | null>(null);
 
   const handleAddChunkAsset = (newAsset: Asset) => {
       onUpdateChunk(chunk.id, { assets: [...chunk.assets, newAsset] });
@@ -150,18 +153,28 @@ const ChunkPanel: React.FC<ChunkPanelProps> = ({
   const handleMakeFilm = async () => {
       setLoadingStep('filming');
       // Iterate through scenes that have images but no videos
-      const scenesToProcess = chunk.scenes.filter(s => s.imageUrl && !s.videoUrl);
+      const scenesToProcess = chunk.scenes.filter(s => (s.imageUrl || s.imageAssetId) && !s.videoUrl && !s.videoAssetId);
       
       const MAX_RETRIES = 5;
       const CONCURRENCY = 3; // Changed from 10 to 1 to avoid 429 RESOURCE_EXHAUSTED
 
       const processSceneWithRetry = async (scene: Scene) => {
-          if (!scene.imageUrl) return;
+          let imageToUse = scene.imageUrl;
+          if (!imageToUse && scene.imageAssetId) {
+             // Dynamically load for generation
+             try {
+                // We need the actual URL/Base64 for generation service
+                const { loadAssetUrl } = await import('../services/storage');
+                imageToUse = await loadAssetUrl(scene.imageAssetId) || undefined;
+             } catch(e) { console.error("Dynamic load failed", e); }
+          }
+
+          if (!imageToUse) return;
           
           let lastError;
           for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
               try {
-                  const videoUrl = await generateVideo(scene.imageUrl, scene, styleState.aspectRatio, (scene.useAssets !== false) ? chunk.assets : []);
+                  const videoUrl = await generateVideo(imageToUse, scene, styleState.aspectRatio, (scene.useAssets !== false) ? chunk.assets : []);
                   onSceneUpdate(chunk.id, scene.id, { videoUrl });
                   return; // Success
               } catch (e: any) {
@@ -221,61 +234,85 @@ const ChunkPanel: React.FC<ChunkPanelProps> = ({
       return onGenerateImage(scene, chunk.assets);
   };
 
-  const handleVideoGenerated = (sceneId: string, url: string) => {
-      onSceneUpdate(chunk.id, sceneId, { videoUrl: url });
+  const handleVideoGenerated = (sceneId: string, url: string, assetId?: string) => {
+      onSceneUpdate(chunk.id, sceneId, { videoUrl: url, videoAssetId: assetId });
   };
 
   const handleDownload = async () => {
-      const zip = new JSZip();
-      
-      // 1. Text Metadata
-      const assetText = chunk.assets.map(a => `ID: ${a.id}\nName: ${a.name}\nDesc: ${a.description}\nDNA: ${a.visualDna||''}`).join('\n---\n');
-      zip.file("assets.txt", assetText);
+      setExportProgress(0);
+      try {
+          const zip = new JSZip();
+          
+          // 1. Text Metadata
+          const assetText = chunk.assets.map(a => `ID: ${a.id}\nName: ${a.name}\nDesc: ${a.description}\nDNA: ${a.visualDna||''}`).join('\n---\n');
+          zip.file("assets.txt", assetText);
 
-      // 2. Full JSON Data (Prompts, Scenes)
-      const chunkData = {
-          chunkId: chunk.id,
-          text: chunk.text,
-          assets: chunk.assets,
-          scenes: chunk.scenes
-      };
-      zip.file("data.json", JSON.stringify(chunkData, null, 2));
+          // 2. Full JSON Data (Prompts, Scenes)
+          const chunkData = {
+              chunkId: chunk.id,
+              text: chunk.text,
+              assets: chunk.assets,
+              scenes: chunk.scenes
+          };
+          zip.file("data.json", JSON.stringify(chunkData, null, 2));
 
-      // 3. Images Folder
-      const imgFolder = zip.folder("images");
-      const vidFolder = zip.folder("videos");
-      const audioFolder = zip.folder("narration");
+          // 3. Images Folder
+          const imgFolder = zip.folder("images");
+          const vidFolder = zip.folder("videos");
+          const audioFolder = zip.folder("narration");
 
-      for (const scene of chunk.scenes) {
-          if (scene.imageUrl) {
-              const response = await fetch(scene.imageUrl);
-              const blob = await response.blob();
-              imgFolder?.file(`${scene.id}.png`, blob);
+          // Helper to get blob from URL or ID
+          const getBlob = async (url?: string, id?: string) => {
+              if (url) {
+                  const res = await fetch(url);
+                  return res.blob();
+              }
+              if (id) {
+                   const { loadAssetUrl } = await import('../services/storage');
+                   const tempUrl = await loadAssetUrl(id);
+                   if (tempUrl) {
+                       const res = await fetch(tempUrl);
+                       const b = await res.blob();
+                       URL.revokeObjectURL(tempUrl);
+                       return b;
+                   }
+              }
+              return null;
+          };
+
+          for (const scene of chunk.scenes) {
+              const imgBlob = await getBlob(scene.imageUrl, scene.imageAssetId);
+              if (imgBlob) imgFolder?.file(`${scene.id}.png`, imgBlob);
+
+              const vidBlob = await getBlob(scene.videoUrl, scene.videoAssetId);
+              if (vidBlob) vidFolder?.file(`${scene.id}.mp4`, vidBlob);
+              
+              if (scene.narrationAudioUrl) {
+                  const response = await fetch(scene.narrationAudioUrl);
+                  const blob = await response.blob();
+                  audioFolder?.file(`${scene.id}_narration.wav`, blob);
+              }
           }
-          if (scene.videoUrl) {
-              const response = await fetch(scene.videoUrl);
-              const blob = await response.blob();
-              vidFolder?.file(`${scene.id}.mp4`, blob);
+
+          // 4. Asset Reference Images
+          const assetFolder = zip.folder("asset_refs");
+          for (const asset of chunk.assets) {
+              const assetBlob = await getBlob(asset.refImageUrl, asset.refImageAssetId);
+              if (assetBlob) {
+                 assetFolder?.file(`${asset.id}_${asset.name}.png`, assetBlob);
+              }
           }
-          if (scene.narrationAudioUrl) {
-              const response = await fetch(scene.narrationAudioUrl);
-              const blob = await response.blob();
-              audioFolder?.file(`${scene.id}_narration.wav`, blob);
-          }
+
+          const content = await zip.generateAsync({ type: "blob" }, (metadata) => {
+              setExportProgress(metadata.percent);
+          });
+          saveAs(content, `nano_banana_chapter_${chunk.index + 1}.zip`);
+      } catch (e: any) {
+          console.error("Export failed", e);
+          alert((language === 'Chinese' ? "导出失败: " : "Export Failed: ") + e.message);
+      } finally {
+          setExportProgress(null);
       }
-
-      // 4. Asset Reference Images
-      const assetFolder = zip.folder("asset_refs");
-      for (const asset of chunk.assets) {
-          if (asset.refImageUrl) {
-             const response = await fetch(asset.refImageUrl);
-             const blob = await response.blob();
-             assetFolder?.file(`${asset.id}_${asset.name}.png`, blob);
-          }
-      }
-
-      const content = await zip.generateAsync({ type: "blob" });
-      saveAs(content, `nano_banana_chapter_${chunk.index + 1}.zip`);
   };
 
   return (
@@ -287,16 +324,29 @@ const ChunkPanel: React.FC<ChunkPanelProps> = ({
                 <button className="text-gray-400">
                     {isActive ? <ChevronDown className="w-5 h-5" /> : <ChevronRight className="w-5 h-5" />}
                 </button>
-                <div>
-                    <h3 className="text-sm font-bold text-white flex items-center gap-2">
-                        {labels.chunkLabel} {chunk.index + 1}
-                        {isLocked && <span className="text-[10px] bg-banana-500/20 text-banana-400 px-2 py-0.5 rounded-full border border-banana-500/30">Auto-Focus</span>}
-                    </h3>
+                <div className="flex-1" onClick={e => e.stopPropagation()}>
+                    <div className="flex items-center gap-2">
+                        <input
+                            type="text"
+                            value={chunk.title || `${labels.chunkLabel} ${chunk.index + 1}`}
+                            onChange={(e) => onUpdateChunk(chunk.id, { title: e.target.value })}
+                            className="bg-transparent text-sm font-bold text-white focus:outline-none focus:ring-1 focus:ring-banana-500/50 rounded px-1 -ml-1 hover:bg-white/5 transition-colors w-full"
+                        />
+                        {isLocked && <span className="text-[10px] bg-banana-500/20 text-banana-400 px-2 py-0.5 rounded-full border border-banana-500/30 whitespace-nowrap">Auto-Focus</span>}
+                    </div>
                     <p className="text-xs text-gray-500 font-mono mt-1">{chunk.text.substring(0, 50)}...</p>
                 </div>
             </div>
             
             <div className="flex items-center gap-2">
+                 <button
+                    onClick={(e) => { e.stopPropagation(); onDeleteChunk(chunk.id); }}
+                    className="p-1.5 text-gray-500 hover:text-red-400 hover:bg-white/10 rounded transition-colors"
+                    title={labels.btnDelete}
+                 >
+                     <Trash2 className="w-4 h-4" />
+                 </button>
+
                  {/* Asset Status Indicator */}
                  {!areAssetsReady && chunk.assets.length > 0 && (
                      <div className="text-yellow-500 text-xs flex items-center gap-1" title="Please generate asset images in the Assets tab first">
@@ -326,9 +376,18 @@ const ChunkPanel: React.FC<ChunkPanelProps> = ({
                  </div>
              )}
 
-             {chunk.status === 'completed' && (
-                 <button onClick={handleDownload} className="px-3 py-1.5 bg-white/10 hover:bg-white/20 rounded text-xs font-bold text-white flex items-center gap-2">
-                     <Download className="w-4 h-4" /> {labels.btnDownload}
+             {(chunk.status === 'completed' || chunk.scenes.length > 0) && (
+                 <button onClick={handleDownload} disabled={exportProgress !== null} className="px-3 py-1.5 bg-white/10 hover:bg-white/20 rounded text-xs font-bold text-white flex items-center gap-2">
+                     {exportProgress !== null ? (
+                         <div className="flex items-center gap-2">
+                             <div className="w-3 h-3 border-2 border-white/50 border-t-transparent rounded-full animate-spin" />
+                             {Math.round(exportProgress)}%
+                         </div>
+                     ) : (
+                        <>
+                         <Download className="w-4 h-4" /> {labels.btnDownload}
+                        </>
+                     )}
                  </button>
              )}
              

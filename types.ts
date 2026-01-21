@@ -24,7 +24,9 @@ export interface Scene {
   audio_bgm?: string;
 
   imageUrl?: string; 
+  imageAssetId?: string; // New: Persistent ID for image Blob in IndexedDB
   videoUrl?: string; // New: Generated Video URL
+  videoAssetId?: string; // New: Persistent ID for video Blob in IndexedDB
   narrationAudioUrl?: string; // New: Generated Narration Audio URL (Blob URL)
   
   assetIds?: string[]; // IDs of assets appearing in this scene (Image Mode)
@@ -55,6 +57,7 @@ export interface Asset {
   type: 'character' | 'location' | 'item';
   visualDna?: string; // Specific visual tags for this asset
   refImageUrl?: string; 
+  refImageAssetId?: string; // New: Persistent ID for ref image Blob in IndexedDB
   prompt?: string; // The prompt used to generate the reference image
   parentId?: string; 
   variantName?: string; 
@@ -95,6 +98,7 @@ export interface GlobalStyle {
 export interface NovelChunk {
   id: string;
   index: number;
+  title?: string; // User-editable title
   text: string;
   status: 'idle' | 'extracting' | 'extracted' | 'scripting' | 'scripted' | 'shooting' | 'completed';
   assets: Asset[];

@@ -3,6 +3,8 @@ import { Scene, ImageGenStatus, GlobalStyle, Asset } from '../types';
 import { generateSceneImage, generateSpeech, pcmToWav, generateVideo, regenerateScenePrompt, matchAssetsToPrompt, updateVideoPromptDirectly } from '../services/gemini';
 import { Translation } from '../translations';
 import { AssetSelector } from './AssetSelector';
+import { LazyMedia } from './LazyMedia';
+import { loadAssetUrl } from '../services/storage';
 import { Image as ImageIcon, Copy, Aperture, RefreshCw, Download, MessageSquare, Music, Video, Clock, Camera, Zap, Volume2, Mic, Film, Upload, Plus, Trash2, Link as LinkIcon, X } from 'lucide-react';
 
 interface SceneCardProps {
@@ -15,7 +17,7 @@ interface SceneCardProps {
   isGeneratingExternal?: boolean; 
   onGenerateImageOverride?: (scene: Scene) => Promise<string>;
   onImageGenerated?: (id: string, url: string) => void;
-  onVideoGenerated?: (id: string, url: string) => void;
+  onVideoGenerated?: (id: string, url: string, assetId?: string) => void;
   globalStyle: GlobalStyle;
   areAssetsReady?: boolean; // New Prop for workflow enforcement
   assets?: Asset[];
@@ -52,6 +54,9 @@ const SceneCard: React.FC<SceneCardProps> = ({
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const isGeneratingRef = useRef(false);
+  
+  const hasImage = !!scene.imageUrl || !!scene.imageAssetId;
+  const hasVideo = !!scene.videoUrl || !!scene.videoAssetId;
   
   const [useAssets, setUseAssets] = useState(scene.useAssets ?? true);
   const [activeAssetSelector, setActiveAssetSelector] = useState<'none' | 'image' | 'video'>('none');
@@ -407,7 +412,7 @@ const SceneCard: React.FC<SceneCardProps> = ({
   const handleGenerateImage = async (force: boolean = false) => {
     if (isGeneratingRef.current) return;
     if (!areAssetsReady) return;
-    if (!force && scene.imageUrl) return; 
+    if (!force && hasImage) return; 
     
     isGeneratingRef.current = true;
     setGenStatus(ImageGenStatus.GENERATING);
@@ -432,14 +437,25 @@ const SceneCard: React.FC<SceneCardProps> = ({
   };
 
   const handleGenerateVideo = async () => {
-    const imageToUse = latestImageRef.current || scene.imageUrl;
+    let imageToUse = latestImageRef.current || scene.imageUrl;
+    
+    // Lazy Load Image if needed
+    if (!imageToUse && scene.imageAssetId) {
+        try {
+            const loaded = await loadAssetUrl(scene.imageAssetId);
+            if (loaded) imageToUse = loaded;
+        } catch (e) {
+            console.error("Failed to load image for video gen", e);
+        }
+    }
+
     if (!imageToUse) return; // Need image first
     setVideoStatus(ImageGenStatus.GENERATING);
     try {
-      const url = await generateVideo(imageToUse, scene, globalStyle.aspectRatio, useAssets ? assets : []);
+      const { url, assetId } = await generateVideo(imageToUse, scene, globalStyle.aspectRatio, useAssets ? assets : []);
       setVideoStatus(ImageGenStatus.COMPLETED);
       if (onVideoGenerated) {
-          onVideoGenerated(scene.id, url);
+          onVideoGenerated(scene.id, url, assetId);
       }
     } catch (error) {
       console.error(error);
@@ -499,7 +515,16 @@ const SceneCard: React.FC<SceneCardProps> = ({
   };
 
   const saveImage = async () => {
-      const imageToSave = latestImageRef.current || scene.imageUrl;
+      let imageToSave = latestImageRef.current || scene.imageUrl;
+      
+      if (!imageToSave && scene.imageAssetId) {
+          try {
+              imageToSave = await loadAssetUrl(scene.imageAssetId) || undefined;
+          } catch (e) {
+              console.error("Failed to load image for save", e);
+          }
+      }
+
       if (imageToSave) {
           try {
               let href = imageToSave;
@@ -591,29 +616,32 @@ const SceneCard: React.FC<SceneCardProps> = ({
             </div>
           )}
 
-          {scene.imageUrl ? (
+          {hasImage ? (
             <div className="relative w-full h-full flex items-center justify-center bg-black">
-              {viewMode === 'video' && scene.videoUrl ? (
-                  <video 
-                    key={scene.videoUrl}
-                    ref={videoRef}
+              {viewMode === 'video' && hasVideo ? (
+                  <LazyMedia 
+                    key={scene.videoUrl || scene.videoAssetId}
+                    assetId={scene.videoAssetId}
+                    fallbackUrl={scene.videoUrl}
+                    type="video"
                     controls 
-                    className="max-w-full max-h-[320px] object-contain"
-                  >
-                    <source src={scene.videoUrl} type="video/mp4" />
-                  </video>
+                    className="w-full h-full max-h-[320px]"
+                    imgClassName="max-w-full max-h-[320px] object-contain"
+                  />
               ) : (
-                  <img 
-                    src={scene.imageUrl} 
+                  <LazyMedia 
+                    assetId={scene.imageAssetId}
+                    fallbackUrl={scene.imageUrl}
+                    type="image"
                     alt={`Scene ${scene.id}`} 
-                    className="max-w-full max-h-[320px] w-auto h-auto object-contain cursor-pointer"
+                    className="w-full h-full max-h-[320px] cursor-pointer"
+                    imgClassName="max-w-full max-h-[320px] w-auto h-auto object-contain"
                     onClick={saveImage}
-                    title={labels.saveImage}
                   />
               )}
 
               {/* View Toggle */}
-              {(scene.imageUrl && scene.videoUrl) && (
+              {(hasImage && hasVideo) && (
                 <div className="absolute bottom-2 left-1/2 -translate-x-1/2 flex bg-black/80 rounded-full p-1 border border-white/10 gap-1 z-20">
                     <button 
                         onClick={() => setViewMode('image')}
@@ -867,7 +895,7 @@ const SceneCard: React.FC<SceneCardProps> = ({
                      </div>
 
                      {/* Reference Image IDs List (Video) */}
-                     {scene.imageUrl ? (
+                     {hasImage ? (
                      <div className="flex flex-col gap-2 mb-1">
                         {scene.isStartEndFrameMode ? (
                             /* --- START/END FRAME MODE UI --- */

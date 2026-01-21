@@ -69,6 +69,8 @@ export type Translation = {
   btnScript: string;
   btnShoot: string;
   btnDownload: string;
+  btnDelete: string;
+  confirmDeleteChunk: string;
   btnFilm: string;
   statusIdle: string;
   statusReady: string;
@@ -158,6 +160,8 @@ export const translations: Record<string, Translation> = {
     btnScript: "生成分镜脚本",
     btnShoot: "一键拍摄",
     btnDownload: "下载资产包 (ZIP)",
+    btnDelete: "删除章节",
+    confirmDeleteChunk: "确定要删除这个章节片段吗？此操作不可撤销。",
     btnFilm: "一键成片",
     statusIdle: "待处理",
     statusReady: "准备就绪",
@@ -245,6 +249,8 @@ export const translations: Record<string, Translation> = {
     btnScript: "Generate Script",
     btnShoot: "Shoot All",
     btnDownload: "Download ZIP",
+    btnDelete: "Delete Chunk",
+    confirmDeleteChunk: "Are you sure you want to delete this chunk? This cannot be undone.",
     btnFilm: "Make Film",
     statusIdle: "Idle",
     statusReady: "Ready",
