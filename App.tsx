@@ -91,14 +91,12 @@ const App: React.FC = () => {
             const savedState = await loadState(STATE_KEY);
             if (savedState) {
                 if (savedState.globalAssets) {
-                    const hydratedAssets = await Promise.all(savedState.globalAssets.map(async (asset: Asset) => {
-                         if (asset.refImageAssetId) {
-                             const url = await loadAssetUrl(asset.refImageAssetId);
-                             if (url) return { ...asset, refImageUrl: url };
-                         }
-                         return asset;
+                    // Lazy Hydration: Don't load Blob URLs eagerly. Components will load them via assetId.
+                    const cleanAssets = savedState.globalAssets.map((asset: Asset) => ({
+                         ...asset,
+                         refImageUrl: asset.refImageUrl?.startsWith('blob:') ? undefined : asset.refImageUrl
                     }));
-                    setGlobalAssets(hydratedAssets);
+                    setGlobalAssets(cleanAssets);
                 }
                 if (savedState.chunks) {
                     // Hydrate chunks: Metadata only. Assets are loaded lazily by components.

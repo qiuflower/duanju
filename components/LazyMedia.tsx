@@ -54,10 +54,14 @@ export const LazyMedia: React.FC<LazyMediaProps> = ({
   const shouldLoad = isInView || !!fallbackUrl;
   
   const { url, loading } = useAssetUrl(shouldLoad ? assetId : undefined, fallbackUrl);
+  
+  // Optimization: Only render the heavy media element if in view, 
+  // even if we have the URL loaded (unless it's a small fallback we want to show eagerly, but here we prioritize performance)
+  const showContent = isInView;
 
   return (
     <div ref={ref} className={`relative overflow-hidden bg-black/20 flex items-center justify-center ${className}`} onClick={onClick}>
-      {!isInView && !fallbackUrl ? (
+      {!showContent ? (
         // Placeholder when out of view
         <div className="text-gray-600 flex flex-col items-center gap-2">
            {type === 'image' ? <ImageIcon className="w-6 h-6 opacity-20" /> : <Film className="w-6 h-6 opacity-20" />}

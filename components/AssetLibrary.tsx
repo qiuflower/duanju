@@ -2,6 +2,7 @@ import React, { useState, useRef } from 'react';
 import { Asset, GlobalStyle } from '../types';
 import { Translation } from '../translations';
 import { LazyMedia } from './LazyMedia';
+import { Virtuoso } from 'react-virtuoso';
 import { User, MapPin, Package, Plus, Trash2, Wand2, Image as ImageIcon, Camera, GitBranch, RefreshCw, Download, ChevronRight, CornerDownRight, Upload, Copy, Pause } from 'lucide-react';
 import { generateAssetImage } from '../services/gemini';
 
@@ -240,14 +241,29 @@ const AssetLibrary: React.FC<AssetLibraryProps> = ({
       e.target.value = ''; // Reset input
   };
 
-  // Recursive Asset Row
-  const renderAssetRow = (asset: Asset, depth: number = 0) => {
+  // Flatten assets for virtualization
+  const assetIds = new Set(assets.map(a => a.id));
+  const rootAssets = assets.filter(a => !a.parentId || !assetIds.has(a.parentId));
+
+  const flatAssets = React.useMemo(() => {
+      const result: { asset: Asset; depth: number }[] = [];
+      const traverse = (asset: Asset, depth: number) => {
+          result.push({ asset, depth });
+          if (expandedIds.has(asset.id)) {
+              const children = assets.filter(a => a.parentId === asset.id);
+              children.forEach(child => traverse(child, depth + 1));
+          }
+      };
+      rootAssets.forEach(root => traverse(root, 0));
+      return result;
+  }, [assets, expandedIds, rootAssets]);
+
+  const RowContent = ({ asset, depth }: { asset: Asset; depth: number }) => {
     const children = assets.filter(a => a.parentId === asset.id);
     const hasChildren = children.length > 0;
     const isExpanded = expandedIds.has(asset.id);
     
     return (
-        <div key={asset.id} className="flex flex-col">
             <div className={`
                 relative flex items-start gap-3 p-3 rounded-lg border border-white/5 
                 hover:border-banana-500/30 transition-colors group bg-black/20
@@ -384,20 +400,8 @@ const AssetLibrary: React.FC<AssetLibraryProps> = ({
                      </div>
                 </div>
             </div>
-            
-            {/* Render Children Recursively - Only if expanded */}
-            {hasChildren && isExpanded && (
-                <div className="flex flex-col animate-in slide-in-from-top-2 fade-in duration-200">
-                    {children.map(child => renderAssetRow(child, depth + 1))}
-                </div>
-            )}
-        </div>
     );
   };
-
-  const assetIds = new Set(assets.map(a => a.id));
-  // Show as root if no parent, OR if parent is not in the current list (orphan)
-  const rootAssets = assets.filter(a => !a.parentId || !assetIds.has(a.parentId));
 
   return (
     <div className="flex flex-col h-full bg-dark-800 border-x border-b border-white/10 rounded-b-xl overflow-hidden shadow-xl">
@@ -420,21 +424,33 @@ const AssetLibrary: React.FC<AssetLibraryProps> = ({
           </div>
        </div>
 
-       <div className="flex-1 overflow-y-auto overflow-x-hidden p-4">
-          <div className="bg-gradient-to-br from-banana-900/20 to-transparent p-4 rounded-xl border border-banana-500/20 text-center mb-4">
-             <p className="text-xs text-banana-100/70 mb-3">{labels.autoExtractTip}</p>
-             <button
-                onClick={onExtract}
-                disabled={isExtracting || !hasText}
-                className={`w-full py-2 px-3 rounded-lg text-sm font-bold flex items-center justify-center gap-2 transition-all ${isExtracting || !hasText ? 'bg-gray-700 text-gray-500 cursor-not-allowed' : 'bg-banana-500 hover:bg-banana-400 text-dark-900 shadow-lg shadow-banana-500/20'}`}
-             >
-                {isExtracting ? <><div className="w-4 h-4 border-2 border-dark-900 border-t-transparent rounded-full animate-spin" />{labels.extracting}</> : <><Wand2 className="w-4 h-4" />{labels.extractAssets}</>}
-             </button>
-          </div>
-
-          {assets.length === 0 && !isExtracting && <div className="text-center py-8 text-gray-600 text-xs italic">{labels.noAssets}</div>}
-
-          {rootAssets.map(asset => renderAssetRow(asset, 0))}
+       <div className="flex-1 overflow-hidden relative">
+          <Virtuoso
+             data={flatAssets}
+             components={{
+                 Header: () => (
+                     <div className="p-4 pb-0">
+                         <div className="bg-gradient-to-br from-banana-900/20 to-transparent p-4 rounded-xl border border-banana-500/20 text-center mb-4">
+                            <p className="text-xs text-banana-100/70 mb-3">{labels.autoExtractTip}</p>
+                            <button
+                                onClick={onExtract}
+                                disabled={isExtracting || !hasText}
+                                className={`w-full py-2 px-3 rounded-lg text-sm font-bold flex items-center justify-center gap-2 transition-all ${isExtracting || !hasText ? 'bg-gray-700 text-gray-500 cursor-not-allowed' : 'bg-banana-500 hover:bg-banana-400 text-dark-900 shadow-lg shadow-banana-500/20'}`}
+                            >
+                                {isExtracting ? <><div className="w-4 h-4 border-2 border-dark-900 border-t-transparent rounded-full animate-spin" />{labels.extracting}</> : <><Wand2 className="w-4 h-4" />{labels.extractAssets}</>}
+                            </button>
+                         </div>
+                         {assets.length === 0 && !isExtracting && <div className="text-center py-8 text-gray-600 text-xs italic">{labels.noAssets}</div>}
+                     </div>
+                 ),
+                 Footer: () => <div className="h-4" />
+             }}
+             itemContent={(index, item) => (
+                 <div className="px-4 pb-1">
+                    <RowContent asset={item.asset} depth={item.depth} />
+                 </div>
+             )}
+          />
        </div>
     </div>
   );

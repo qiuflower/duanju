@@ -16,7 +16,8 @@
     "jszip": "3.10.1",
     "lucide-react": "^0.560.0",
     "react": "^19.2.1",
-    "react-dom": "^19.2.1"
+    "react-dom": "^19.2.1",
+    "react-virtuoso": "^4.18.1"
   },
   "devDependencies": {
     "@types/node": "^22.14.0",
