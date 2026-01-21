@@ -62,15 +62,45 @@ const SceneCard: React.FC<SceneCardProps> = ({
   const latestImageRef = useRef<string | null>(scene.imageUrl || null);
   const lastSceneIdRef = useRef(scene.id);
 
+  const specUpdateTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const assetUpdateTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Track the last processed asset IDs to prevent redundant updates
+  const lastProcessedImageAssetsRef = useRef<string[]>(scene.assetIds || []);
+  const lastProcessedVideoAssetsRef = useRef<string[]>(
+      scene.isStartEndFrameMode 
+          ? (scene.startEndAssetIds || []) 
+          : (scene.videoAssetIds || [])
+  );
+  const lastProcessedSpecsRef = useRef({
+      video_duration: scene.video_duration,
+      video_camera: scene.video_camera,
+      video_lens: scene.video_lens,
+      video_vfx: scene.video_vfx
+  });
+
   // Clear local image ref immediately when scene ID changes to prevent cross-scene pollution
   if (lastSceneIdRef.current !== scene.id) {
       lastSceneIdRef.current = scene.id;
       latestImageRef.current = null;
+      // Reset tracking refs for new scene
+      lastProcessedImageAssetsRef.current = scene.assetIds || [];
+      lastProcessedVideoAssetsRef.current = scene.isStartEndFrameMode 
+          ? (scene.startEndAssetIds || []) 
+          : (scene.videoAssetIds || []);
+      lastProcessedSpecsRef.current = {
+          video_duration: scene.video_duration,
+          video_camera: scene.video_camera,
+          video_lens: scene.video_lens,
+          video_vfx: scene.video_vfx
+      };
   }
 
 
   const updateVideoPromptWithAssets = async (newAssetIds: string[], overrideAssets?: Asset[]) => {
       setVideoPromptUpdating(true);
+      // Update last processed ref
+      lastProcessedVideoAssetsRef.current = [...newAssetIds].sort();
       try {
           const tempScene = { ...scene, assetIds: newAssetIds };
           let assetsToUse = overrideAssets || assets;
@@ -107,9 +137,40 @@ const SceneCard: React.FC<SceneCardProps> = ({
       }
   };
 
+  const scheduleAssetUpdate = (newIds: string[], assetsToUse: Asset[], type: 'video' | 'image') => {
+       if (assetUpdateTimerRef.current) clearTimeout(assetUpdateTimerRef.current);
+       
+       // Batch Update: Wait 5 seconds for user to finish operations
+       assetUpdateTimerRef.current = setTimeout(() => {
+           // Check if assets have actually changed compared to last processed state
+           const sortedNewIds = [...newIds].sort();
+           const lastIds = type === 'video' 
+                ? lastProcessedVideoAssetsRef.current 
+                : lastProcessedImageAssetsRef.current;
+           const sortedLastIds = [...lastIds].sort();
+           
+           const isSame = sortedNewIds.length === sortedLastIds.length && 
+                          sortedNewIds.every((val, index) => val === sortedLastIds[index]);
+
+           if (isSame) {
+               //console.log(`[SceneCard] Asset update skipped - no change detected for ${type} assets.`);
+               return;
+           }
+
+           if (type === 'video') {
+               updateVideoPromptWithAssets(newIds, assetsToUse);
+           } else {
+               updatePromptWithAssets(newIds, assetsToUse);
+           }
+       }, 5000);
+   };
+
   const updatePromptWithAssets = async (newAssetIds: string[], overrideAssets?: Asset[]) => {
       setPromptGenLoading(true);
-      // Update IDs immediately
+      // Update last processed ref
+      lastProcessedImageAssetsRef.current = [...newAssetIds].sort();
+
+      // Update IDs immediately (handled by caller now too, but keeping for safety in direct calls)
       onUpdate(scene.id, 'assetIds', newAssetIds);
       
       try {
@@ -125,28 +186,43 @@ const SceneCard: React.FC<SceneCardProps> = ({
       }
   };
 
-  const handleSpecChange = async (field: keyof Scene, value: string) => {
-      // 1. Update local state immediately
-      onUpdate(scene.id, field, value);
+  const handleSpecCommit = async (field: keyof Scene, value: string) => {
+      const tempScene = { ...scene, [field]: value };
+      
+      // Check if specs actually changed compared to last processed
+      const prevSpecs = lastProcessedSpecsRef.current;
+      const isChanged = 
+          tempScene.video_duration !== prevSpecs.video_duration ||
+          tempScene.video_camera !== prevSpecs.video_camera ||
+          tempScene.video_lens !== prevSpecs.video_lens ||
+          tempScene.video_vfx !== prevSpecs.video_vfx;
 
-      // 2. Trigger optimization (Direct Update)
+      if (!isChanged) return;
+
+      // Update Ref
+      lastProcessedSpecsRef.current = {
+          video_duration: tempScene.video_duration,
+          video_camera: tempScene.video_camera,
+          video_lens: tempScene.video_lens,
+          video_vfx: tempScene.video_vfx
+      };
+
       setVideoPromptUpdating(true);
       try {
-          const tempScene = { ...scene, [field]: value };
-          
           // Optimize prompt based on new spec directly
           const optimized = await updateVideoPromptDirectly(tempScene, language, assets, globalStyle);
           
           onUpdate(scene.id, 'video_prompt', optimized.prompt);
-          
-          // Note: We don't overwrite the spec fields again with optimized.specs here 
-          // to avoid fighting with the user's input.
           
       } catch (e) {
           console.error("Spec update optimization failed", e);
       } finally {
           setVideoPromptUpdating(false);
       }
+  };
+
+  const handleLocalSpecChange = (field: keyof Scene, value: string) => {
+      onUpdate(scene.id, field, value);
   };
 
   const handleAddAsset = (assetId: string, newAsset?: Asset) => {
@@ -166,7 +242,8 @@ const SceneCard: React.FC<SceneCardProps> = ({
             
             // Trigger Prompt Update (Requirement: Only on user ADD reference image)
             const assetsToUse = newAsset ? [...assets, newAsset] : assets;
-            updateVideoPromptWithAssets(newIds, assetsToUse);
+            // Use Schedule for batching
+            scheduleAssetUpdate(newIds, assetsToUse, 'video');
             
         } else {
             // --- STANDARD MODE ---
@@ -183,7 +260,7 @@ const SceneCard: React.FC<SceneCardProps> = ({
                 
                 // Only update Video Prompt and Video Asset IDs
                 onUpdate(scene.id, 'videoAssetIds', newIds);
-                updateVideoPromptWithAssets(newIds, assetsToUse);
+                scheduleAssetUpdate(newIds, assetsToUse, 'video');
             }
         }
     } else {
@@ -192,7 +269,9 @@ const SceneCard: React.FC<SceneCardProps> = ({
         if (!currentIds.includes(assetId)) {
             const newIds = [...currentIds, assetId];
             const assetsToUse = newAsset ? [...assets, newAsset] : assets;
-            updatePromptWithAssets(newIds, assetsToUse);
+            
+            onUpdate(scene.id, 'assetIds', newIds); // Update UI immediately
+            scheduleAssetUpdate(newIds, assetsToUse, 'image');
         }
     }
     setActiveAssetSelector('none');
@@ -217,7 +296,7 @@ const SceneCard: React.FC<SceneCardProps> = ({
                } else {
                    // Fallback: If no backup, trigger update to ensure consistency
                    //console.warn(`[SceneCard] No backup found for Scene ${scene.id}, triggering regeneration.`);
-                   updateVideoPromptWithAssets(newIds);
+                   scheduleAssetUpdate(newIds, assets, 'video');
                }
                
           } else {
@@ -225,12 +304,13 @@ const SceneCard: React.FC<SceneCardProps> = ({
               const currentVideoIds = scene.videoAssetIds || scene.assetIds?.slice(0, 3) || [];
               const newIds = currentVideoIds.filter(id => id !== assetId);
               onUpdate(scene.id, 'videoAssetIds', newIds);
-              updateVideoPromptWithAssets(newIds);
+              scheduleAssetUpdate(newIds, assets, 'video');
           }
       } else {
           const currentIds = scene.assetIds || [];
           const newIds = currentIds.filter(id => id !== assetId);
-          updatePromptWithAssets(newIds);
+          onUpdate(scene.id, 'assetIds', newIds);
+          scheduleAssetUpdate(newIds, assets, 'image');
       }
   };
 
@@ -741,8 +821,8 @@ const SceneCard: React.FC<SceneCardProps> = ({
                            <span className="opacity-50">{labels.durationLabel}:</span>
                            <input 
                                 value={scene.video_duration || ''} 
-                                onChange={e => onUpdate(scene.id, 'video_duration', e.target.value)} 
-                                onBlur={e => handleSpecChange('video_duration', e.target.value)}
+                                onChange={e => handleLocalSpecChange('video_duration', e.target.value)} 
+                                onBlur={e => handleSpecCommit('video_duration', e.target.value)}
                                 onKeyDown={e => { if(e.key === 'Enter') { e.currentTarget.blur(); } }}
                                 className="bg-transparent w-full outline-none" 
                                 placeholder="3s" 
@@ -753,8 +833,8 @@ const SceneCard: React.FC<SceneCardProps> = ({
                            <span className="opacity-50">{labels.lensLabel}:</span>
                            <input 
                                 value={scene.video_lens || ''} 
-                                onChange={e => onUpdate(scene.id, 'video_lens', e.target.value)} 
-                                onBlur={e => handleSpecChange('video_lens', e.target.value)}
+                                onChange={e => handleLocalSpecChange('video_lens', e.target.value)} 
+                                onBlur={e => handleSpecCommit('video_lens', e.target.value)}
                                 onKeyDown={e => { if(e.key === 'Enter') { e.currentTarget.blur(); } }}
                                 className="bg-transparent w-full outline-none" 
                                 placeholder="35mm" 
@@ -765,8 +845,8 @@ const SceneCard: React.FC<SceneCardProps> = ({
                            <span className="opacity-50">{labels.cameraLabel}:</span>
                            <input 
                                 value={scene.video_camera || ''} 
-                                onChange={e => onUpdate(scene.id, 'video_camera', e.target.value)} 
-                                onBlur={e => handleSpecChange('video_camera', e.target.value)}
+                                onChange={e => handleLocalSpecChange('video_camera', e.target.value)} 
+                                onBlur={e => handleSpecCommit('video_camera', e.target.value)}
                                 onKeyDown={e => { if(e.key === 'Enter') { e.currentTarget.blur(); } }}
                                 className="bg-transparent w-full outline-none" 
                                 placeholder="Pan" 
@@ -777,8 +857,8 @@ const SceneCard: React.FC<SceneCardProps> = ({
                            <span className="opacity-50">{labels.vfxLabel}:</span>
                            <input 
                                 value={scene.video_vfx || ''} 
-                                onChange={e => onUpdate(scene.id, 'video_vfx', e.target.value)} 
-                                onBlur={e => handleSpecChange('video_vfx', e.target.value)}
+                                onChange={e => handleLocalSpecChange('video_vfx', e.target.value)} 
+                                onBlur={e => handleSpecCommit('video_vfx', e.target.value)}
                                 onKeyDown={e => { if(e.key === 'Enter') { e.currentTarget.blur(); } }}
                                 className="bg-transparent w-full outline-none" 
                                 placeholder="-" 

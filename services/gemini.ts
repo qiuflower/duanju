@@ -361,12 +361,10 @@ export const generateVideo = async (
 
   const normalizeToBase64 = async (urlOrB64: string): Promise<string> => {
       if (!urlOrB64) return "";
-      if (isBase64(urlOrB64)) return urlOrB64;
-      if (isHttpUrl(urlOrB64)) {
-          // Use existing helper if available, or fetch manually
-          return await ensurePngDataUrl(urlOrB64);
-      }
-      return urlOrB64; // Return as is if unknown format (validation will catch it)
+      // Always normalize to PNG to avoid mixed format errors (e.g. JPG + PNG)
+      // This ensures that whether it's a URL, a JPG Base64, or a PNG Base64, 
+      // the result is always a unified PNG Base64 string.
+      return await ensurePngDataUrl(urlOrB64);
   };
 
   // Parallel conversion for performance
@@ -1254,7 +1252,7 @@ export const analyzeNovelText = async (
 
         if (isStandard && (workStyle || textureStyle)) {
              generatedDna = currentDna;
-             console.log("[Gemini] Reusing existing Visual DNA:", generatedDna);
+             //console.log("[Gemini] Reusing existing Visual DNA:", generatedDna);
         } else if (workStyle || textureStyle) {
              // Only regenerate if missing or non-standard
              // 1. First check if workStyle itself can be the DNA (if it's detailed enough)
