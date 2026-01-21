@@ -56,9 +56,9 @@ const AssetLibrary: React.FC<AssetLibraryProps> = ({
   };
 
   const addAsset = (parentId?: string, parentIdString?: string) => {
-    // Naming convention: If parent exists, ChildID = ParentID + "_variant"
+    // Naming convention: If parent exists, ChildID = ParentID + "_variant" + unique_suffix
     const baseId = parentIdString || `custom_${Date.now()}`;
-    const newId = parentId ? `${baseId}_variant` : baseId;
+    const newId = parentId ? `${baseId}_variant_${Date.now()}` : baseId;
     
     const newAsset: Asset = {
       id: newId,
@@ -287,16 +287,16 @@ const AssetLibrary: React.FC<AssetLibraryProps> = ({
                 </div>
 
                 <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 mb-2">
+                    <div className="flex items-center mb-2 relative">
                         <input 
                             type="text"
                             value={asset.name}
                             onChange={(e) => onUpdateAsset({ ...asset, name: e.target.value })}
                             placeholder={labels.assetNamePlaceholder}
-                            className="flex-1 bg-transparent border-none text-sm font-semibold text-white placeholder-gray-600 focus:outline-none focus:ring-1 focus:ring-banana-500/50 rounded px-1"
+                            className="flex-1 bg-transparent border-none text-sm font-semibold text-white placeholder-gray-600 focus:outline-none focus:ring-1 focus:ring-banana-500/50 rounded px-1 pr-14"
                         />
-                        <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                             <button onClick={() => addAsset(asset.id, asset.id)} className="text-gray-500 hover:text-banana-400 p-1" title="Add Variant">
+                        <div className="absolute right-0 top-1/2 -translate-y-1/2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity bg-dark-800/80 rounded backdrop-blur-sm">
+                            <button onClick={() => addAsset(asset.id, asset.id)} className="text-gray-500 hover:text-banana-400 p-1" title="Add Variant">
                                 <Plus className="w-3.5 h-3.5" />
                             </button>
                             <button onClick={() => onDeleteAsset(asset.id)} className="text-gray-500 hover:text-red-400 p-1">
@@ -393,7 +393,7 @@ const AssetLibrary: React.FC<AssetLibraryProps> = ({
           </div>
        </div>
 
-       <div className="flex-1 overflow-y-auto p-4">
+       <div className="flex-1 overflow-y-auto overflow-x-hidden p-4">
           <div className="bg-gradient-to-br from-banana-900/20 to-transparent p-4 rounded-xl border border-banana-500/20 text-center mb-4">
              <p className="text-xs text-banana-100/70 mb-3">{labels.autoExtractTip}</p>
              <button

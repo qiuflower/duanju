@@ -253,214 +253,7 @@ export const matchAssetsToPrompt = (prompt: string, assets: Asset[], explicitIds
       .map(s => s.asset);
 };
 
-const isHttpUrl = (value: string) => /^https?:\/\//i.test(value);
-
-const parseDataUrl = (value: string): { mimeType: string; base64: string } | null => {
-  const m = value.match(/^data:([^;]+);base64,([A-Za-z0-9+/=]+)$/);
-  if (!m) return null;
-  return { mimeType: m[1], base64: m[2] };
-};
-
-const base64ByteSize = (base64: string) => Math.floor((base64.length * 3) / 4);
-
-const guessImageMimeFromBase64 = (base64: string): string => {
-  const s = (base64 || "").trim().replace(/\s+/g, "");
-  if (!s) return "image/png";
-  if (s.startsWith("/9j/")) return "image/jpeg";
-  if (s.startsWith("iVBORw0KGgo")) return "image/png";
-  if (s.startsWith("R0lGOD")) return "image/gif";
-  if (s.startsWith("UklGR")) return "image/webp";
-  if (s.startsWith("Qk")) return "image/bmp";
-  return "image/png";
-};
-
-const normalizeImageToDataUrl = (value: string): string => {
-  if (!value) return "";
-  if (/^data:/i.test(value)) return value;
-  if (isHttpUrl(value)) return value;
-  const b64 = value.trim().replace(/\s+/g, "");
-  const mimeType = guessImageMimeFromBase64(b64);
-  return `data:${mimeType};base64,${b64}`;
-};
-
-const findFirstHttpUrlDeep = (input: unknown): string | null => {
-  const seen = new Set<unknown>();
-
-  const walk = (v: unknown): string | null => {
-    if (typeof v === "string") {
-      const s = v.trim();
-      if (isHttpUrl(s)) return s;
-      return null;
-    }
-
-    if (!v || typeof v !== "object") return null;
-    if (seen.has(v)) return null;
-    seen.add(v);
-
-    if (Array.isArray(v)) {
-      for (const item of v) {
-        const hit = walk(item);
-        if (hit) return hit;
-      }
-      return null;
-    }
-
-    for (const key of Object.keys(v as any)) {
-      const hit = walk((v as any)[key]);
-      if (hit) return hit;
-    }
-    return null;
-  };
-
-  return walk(input);
-};
-
-const uploadImageToHttpsUrl = async (input: string): Promise<string | null> => {
-  if (!input) return null;
-  if (isHttpUrl(input)) return input;
-
-  const keys = [
-    String(process.env.VIDEO_API_KEY || "").trim(),
-    String(process.env.TEXT_API_KEY || "").trim(),
-    String(process.env.IMAGE_API_KEY || "").trim(),
-  ].filter(Boolean);
-  if (!keys.length) return null;
-
-  const dataUrl = normalizeImageToDataUrl(input);
-  if (!dataUrl || isHttpUrl(dataUrl)) return null;
-
-  const body = {
-    base64Array: [dataUrl],
-    sourceBase64: dataUrl,
-    targetBase64: dataUrl,
-    mode: "RELAX",
-  };
-
-  const postOnce = async (authorization: string) => {
-    const res = await fetch(`/api/t8star/mj/submit/upload-discord-images`, {
-      method: "POST",
-      headers: {
-        Accept: "application/json",
-        "Content-Type": "application/json",
-        ...(authorization ? { Authorization: authorization } : {}),
-      },
-      body: JSON.stringify(body),
-    });
-
-    const text = await res.text().catch(() => "");
-    if (!res.ok) {
-      const err = new Error(`Upload failed (${res.status}): ${text || res.statusText}`);
-      (err as any).status = res.status;
-      throw err;
-    }
-
-    if (!text) return null;
-    try {
-      return JSON.parse(text);
-    } catch {
-      return text;
-    }
-  };
-
-  let lastErr: any;
-  for (const key of keys) {
-    const authCandidates = (() => {
-      const k = key.trim();
-      if (!k) return [];
-      if (k.toLowerCase().startsWith("bearer ")) return [k, k.slice("bearer ".length)];
-      return [k, `Bearer ${k}`];
-    })();
-
-    for (const auth of authCandidates) {
-      try {
-        const data = await postOnce(auth);
-        const url = findFirstHttpUrlDeep(data);
-        if (url) return url;
-      } catch (e: any) {
-        lastErr = e;
-        const status = e?.status;
-        if (!status) break;
-        if (status !== 401 && status !== 403 && status !== 404) break;
-      }
-    }
-  }
-
-  void lastErr;
-  return null;
-};
-
-const compressDataUrlToJpegBase64 = async (
-  dataUrl: string,
-  maxDim: number,
-  quality: number
-): Promise<string | null> => {
-  if (typeof document === "undefined") return null;
-
-  const img = new Image();
-  img.decoding = "async";
-  img.crossOrigin = "anonymous";
-
-  const loaded = new Promise<void>((resolve, reject) => {
-    img.onload = () => resolve();
-    img.onerror = () => reject(new Error("Failed to load image for compression"));
-  });
-
-  img.src = dataUrl;
-  await loaded;
-
-  const width = img.naturalWidth || img.width || 0;
-  const height = img.naturalHeight || img.height || 0;
-  if (!width || !height) return null;
-
-  const scale = Math.min(1, maxDim / Math.max(width, height));
-  const targetW = Math.max(1, Math.round(width * scale));
-  const targetH = Math.max(1, Math.round(height * scale));
-
-  const canvas = document.createElement("canvas");
-  canvas.width = targetW;
-  canvas.height = targetH;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return null;
-  ctx.drawImage(img, 0, 0, targetW, targetH);
-
-  const out = canvas.toDataURL("image/jpeg", quality);
-  const parsed = parseDataUrl(out);
-  if (!parsed) return null;
-  return parsed.base64;
-};
-
-const prepareVideoImageForApi = async (
-  input: string,
-  options: { maxBytes: number }
-): Promise<{ value: string; bytes: number }> => {
-  if (!input) return { value: "", bytes: 0 };
-  if (isHttpUrl(input)) return { value: input, bytes: 0 };
-
-  const dataUrl = normalizeImageToDataUrl(input);
-  const parsed = parseDataUrl(dataUrl);
-  const base64 = (parsed?.base64 || "").trim().replace(/\s+/g, "");
-  const bytes = base64ByteSize(base64);
-
-  if (bytes <= options.maxBytes) {
-    return { value: dataUrl, bytes };
-  }
-
-  const attempt1 = await compressDataUrlToJpegBase64(dataUrl, 1024, 0.82);
-  if (attempt1 && base64ByteSize(attempt1) <= options.maxBytes) {
-    return { value: `data:image/jpeg;base64,${attempt1}`, bytes: base64ByteSize(attempt1) };
-  }
-
-  const attempt2 = await compressDataUrlToJpegBase64(dataUrl, 768, 0.76);
-  if (attempt2 && base64ByteSize(attempt2) <= options.maxBytes) {
-    return { value: `data:image/jpeg;base64,${attempt2}`, bytes: base64ByteSize(attempt2) };
-  }
-
-  const attempt3 = await compressDataUrlToJpegBase64(dataUrl, 512, 0.7);
-  if (attempt3) return { value: `data:image/jpeg;base64,${attempt3}`, bytes: base64ByteSize(attempt3) };
-
-  return { value: dataUrl, bytes };
-};
-
+// ----------------------------------------------------
 export const constructVideoPrompt = (scene: Scene, globalStyle?: GlobalStyle): string => {
   // Always ensure Global Style is prepended if available
   const stylePrefix = globalStyle?.visualTags ? `${globalStyle.visualTags}. ` : "";
@@ -631,138 +424,71 @@ export const generateVideo = async (
   }
   // ----------------------------------------------------
 
-  const baseUrl = "https://ai.t8star.cn";
   const model = scene.isStartEndFrameMode ? "veo3.1" : "veo3.1-components";
 
-  // key：必须使用 VIDEO_API_KEY (Fallback to T8/Polo keys)
-  const key = (process.env.VIDEO_API_KEY || process.env.T8_VIDEO_API_KEY || process.env.POLO_VIDEO_API_KEY || "").trim();
-
-  if (!key) {
-    console.error("VIDEO_API_KEY is missing");
-    throw new Error("VIDEO_API_KEY (or T8_VIDEO_API_KEY) is required for video generation. Please check your .env.local file.");
-  }
-
-  const authHeader = key
-    ? (key.toLowerCase().startsWith("bearer ") ? key : `Bearer ${key}`)
-    : "";
-
   try {
-    const maxTotalBytes = 6 * 1024 * 1024;
-    const maxSingleBytes = 3 * 1024 * 1024;
+    // 1) 提交任务 (Call AI Provider)
+    // Use retryWithBackoff to handle transient 429s during submission
+    const operationResult = await retryWithBackoff(async () => {
+        return await ai.models.generateVideos({
+            model,
+            prompt: safePrompt,
+            config: {
+                enhance_prompt: enhancePrompt,
+                images: validImages,
+                aspectRatio: aspectRatio,
+                seconds: 8
+            }
+        });
+    }, 3, 2000, 60000); // 3 retries, start at 2s, 60s timeout for submission
 
-    const uploadedImages = await Promise.all(
-      imagesToSend
-        .filter(Boolean)
-        .map(async (img) => (await uploadImageToHttpsUrl(img)) || img)
-    );
-
-    const prepared = (await Promise.all(
-      uploadedImages
-        .map((img) => prepareVideoImageForApi(img, { maxBytes: maxSingleBytes }))
-    )).filter((x) => !!x.value);
-
-    const payloadBytes = (items: Array<{ value: string; bytes: number }>) =>
-      items.reduce((sum, it) => sum + (isHttpUrl(it.value) ? 0 : it.bytes), 0);
-
-    let finalImages = prepared;
-    while (payloadBytes(finalImages) > maxTotalBytes && finalImages.length > 1) {
-      finalImages = finalImages.slice(1);
-    }
-
-    if (payloadBytes(finalImages) > maxTotalBytes && finalImages.length === 1 && !isHttpUrl(finalImages[0].value)) {
-      const more = await prepareVideoImageForApi(finalImages[0].value, { maxBytes: maxTotalBytes });
-      finalImages = [{ value: more.value, bytes: more.bytes }];
-    }
-
-    // 1) 提交任务
-    const submitResp = await fetch(`${baseUrl}/v2/videos/generations`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...(authHeader ? { "Authorization": authHeader } : {}),
-      },
-      body: JSON.stringify({
-        prompt: safePrompt,
-        model,
-        enhance_prompt: enhancePrompt,
-        // Send multiple images (Assets + Storyboard)
-        images: finalImages.map((x) => x.value),
-        aspect_ratio: aspectRatio,
-      }),
-    });
-
-    if (!submitResp.ok) {
-      const errText = await submitResp.text().catch(() => "");
-      throw new Error(`Submit failed (${submitResp.status}): ${errText || submitResp.statusText}`);
-    }
-
-    const submitData: any = await submitResp.json().catch(() => ({}));
-    const taskId =
-      submitData?.task_id ||
-      submitData?.taskId ||
-      submitData?.id ||
-      submitData?.data?.task_id ||
-      submitData?.data?.taskId ||
-      submitData?.data?.id;
-
-    if (!taskId) throw new Error(`No task_id returned: ${JSON.stringify(submitData)}`);
+    const taskId = operationResult.operation?.id;
+    if (!taskId) throw new Error("Video generation failed to start (no task ID).");
 
     // 2) 轮询任务
     let retries = 0;
     const maxRetries = 60; // 60 * 5s = 5 mins
+    
     while (retries < maxRetries) {
       await new Promise(resolve => setTimeout(resolve, 5000));
 
-      const statusResp = await fetch(`${baseUrl}/v2/videos/generations/${encodeURIComponent(taskId)}`, {
-        method: "GET",
-        headers: {
-          ...(authHeader ? { "Authorization": authHeader } : {}),
-        },
-      });
-
-      if (!statusResp.ok) {
-        const errText = await statusResp.text().catch(() => "");
-        throw new Error(`Status query failed (${statusResp.status}): ${errText || statusResp.statusText}`);
+      const statusResult = await ai.operations.getVideosOperation({ operation: operationResult });
+      
+      if (statusResult.error) {
+          throw new Error(String(statusResult.error));
       }
 
-      const statusData: any = await statusResp.json().catch(() => ({}));
-      const status = statusData?.status;
+      if (statusResult.done) {
+          const outputUrl = statusResult.response?.generatedVideos?.[0]?.video?.uri;
+          if (!outputUrl) throw new Error("Video generation marked done but no output URL found.");
 
-      if (status === "FAILURE") {
-        throw new Error(statusData?.fail_reason || "Video generation failed");
+          // 3) 下载 mp4
+          const videoResponse = await fetch(outputUrl);
+          if (!videoResponse.ok) throw new Error(`Failed to download video: ${videoResponse.statusText}`);
+
+          const videoBlob = await videoResponse.blob();
+          // Convert to Base64 Data URL for persistence
+          return new Promise<string>((resolve, reject) => {
+              const reader = new FileReader();
+              reader.onloadend = () => {
+                  if (typeof reader.result === 'string') {
+                      resolve(reader.result);
+                  } else {
+                      reject(new Error("Failed to convert video to base64"));
+                  }
+              };
+              reader.onerror = reject;
+              reader.readAsDataURL(videoBlob);
+          });
       }
 
-      if (status === "SUCCESS") {
-        const outputUrl = statusData?.data?.output || statusData?.output;
-        if (!outputUrl) throw new Error(`SUCCESS but no output url: ${JSON.stringify(statusData)}`);
-
-        // 3) 下载 mp4
-        const videoResponse = await fetch(outputUrl);
-        if (!videoResponse.ok) throw new Error(`Failed to download video: ${videoResponse.statusText}`);
-
-        const videoBlob = await videoResponse.blob();
-        // Convert to Base64 Data URL for persistence
-        return new Promise<string>((resolve, reject) => {
-            const reader = new FileReader();
-            reader.onloadend = () => {
-                if (typeof reader.result === 'string') {
-                    resolve(reader.result);
-                } else {
-                    reject(new Error("Failed to convert video to base64"));
-                }
-            };
-            reader.onerror = reject;
-            reader.readAsDataURL(videoBlob);
-        });
-      }
-
-      // NOT_START / IN_PROGRESS
+      // IN_PROGRESS
       retries++;
     }
 
     throw new Error("Video generation timed out");
   } catch (e: any) {
-    console.error("Veo Generation Error (t8star):", e);
+    console.error("Veo Generation Error:", e);
     throw new Error(`Video Generation Failed: ${e?.message || String(e)}`);
   }
 };
@@ -1360,7 +1086,7 @@ ${assetMap}
       "video_duration": "3s",
       "video_vfx": "Detailed VFX instructions in ${language}",
       "np_prompt": "{{asset_id}} detailed action description for video generation in ${language}...",
-      "video_prompt": "example:Standard(35mm), Static Camera. [Lighting details]. [Character Visuals] + [Specific Action]. [Environment]. 4k, highly detailed.(in ${language})",
+      "video_prompt": "(Strictly in ${language}).Example:Standard(35mm), Static Camera. [Lighting details]. [Character Visuals] + [Specific Action]. [Environment]. 4k, highly detailed.",
       "audio_dialogue": [{ "speaker": "Hero", "text": "(Tone) Line in ${language}" }],
       "audio_bgm": "Atmosphere and music description in ${language}",
       "audio_sfx": "Sound effects description in ${language}",

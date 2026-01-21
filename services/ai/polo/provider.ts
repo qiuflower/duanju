@@ -1,46 +1,54 @@
 import { GenerateContentResponse, VideosOperation } from "../../../types";
+import { IAIProvider, GenerateContentArgs, GenerateVideosArgs, GetVideosOperationArgs, AIProviderConfig } from "../core/interfaces";
 
-export function createPoloProvider() {
-  const baseUrl = "https://work.poloapi.com";
+export class PoloProvider implements IAIProvider {
+  private config: AIProviderConfig;
+  private baseUrl: string;
+  private textAuth: string;
+  private imageAuth: string;
+  private videoAuth: string;
 
-  // Split keys (fallback to legacy)
-  const legacy = process.env.GEMINI_API_KEY || process.env.API_KEY; // keep compatibility
-  
-  const textKey = process.env.POLO_TEXT_API_KEY || process.env.GEMINI_TEXT_API_KEY || legacy;
-  const imageKey = process.env.POLO_IMAGE_API_KEY || process.env.GEMINI_IMAGE_API_KEY || legacy;
-  const videoKey = process.env.POLO_VIDEO_API_KEY || process.env.VIDEO_API_KEY || legacy;
+  constructor(config?: AIProviderConfig) {
+    this.config = config || {};
+    this.baseUrl = this.config.baseUrl || "https://work.poloapi.com";
+    
+    // Fallback to Env vars if not provided in config
+    const legacy = process.env.GEMINI_API_KEY || process.env.API_KEY;
+    
+    const textKey = this.config.apiKey || process.env.POLO_TEXT_API_KEY || process.env.GEMINI_TEXT_API_KEY || legacy;
+    const imageKey = this.config.mediaApiKey || process.env.POLO_IMAGE_API_KEY || process.env.GEMINI_IMAGE_API_KEY || legacy;
+    const videoKey = this.config.mediaApiKey || process.env.POLO_VIDEO_API_KEY || process.env.VIDEO_API_KEY || legacy;
 
-  const toAuth = (k?: string) => (k?.startsWith("Bearer ") ? k : `${k || ""}`);
-  const textAuth = toAuth(textKey);
-  const imageAuth = toAuth(imageKey);
-  const videoAuth = toAuth(videoKey);
+    this.textAuth = this.toAuth(textKey);
+    this.imageAuth = this.toAuth(imageKey);
+    this.videoAuth = this.toAuth(videoKey);
+  }
 
-  const isImageModel = (model?: string) => {
+  private toAuth(k?: string) {
+    return (k?.startsWith("Bearer ") ? k : `${k || ""}`);
+  }
+
+  private isImageModel(model?: string) {
     if (!model) return false;
     if (/image/i.test(model)) return true;
     if (/imagen/i.test(model)) return true;
     return false;
-  };
+  }
 
-  const extractDataUrlFromText = (
-    text: string
-  ): { mimeType: string; b64: string } | null => {
+  private extractDataUrlFromText(text: string): { mimeType: string; b64: string } | null {
     if (!text) return null;
     const m = text.match(
       /data:((?:image|audio)\/[a-zA-Z0-9.+-]+);base64,([A-Za-z0-9+/=]+)/
     );
     if (!m) return null;
     return { mimeType: m[1], b64: m[2] };
-  };
+  }
 
-  const extractInlineB64 = (
-    messageContent: any
-  ): { mimeType: string; b64: string } | null => {
+  private extractInlineB64(messageContent: any): { mimeType: string; b64: string } | null {
     if (typeof messageContent === "string") {
-      const hit = extractDataUrlFromText(messageContent);
+      const hit = this.extractDataUrlFromText(messageContent);
       if (hit) return hit;
 
-      // some gateways pack JSON as string
       try {
         const obj = JSON.parse(messageContent);
         const b64 =
@@ -65,15 +73,15 @@ export function createPoloProvider() {
         if (!part || typeof part !== "object") continue;
 
         if (part.type === "image_url" && typeof part.image_url?.url === "string") {
-          const hit = extractDataUrlFromText(part.image_url.url);
+          const hit = this.extractDataUrlFromText(part.image_url.url);
           if (hit) return hit;
         }
         if (part.type === "audio_url" && typeof part.audio_url?.url === "string") {
-          const hit = extractDataUrlFromText(part.audio_url.url);
+          const hit = this.extractDataUrlFromText(part.audio_url.url);
           if (hit) return hit;
         }
         if (part.type === "text" && typeof part.text === "string") {
-          const hit = extractDataUrlFromText(part.text);
+          const hit = this.extractDataUrlFromText(part.text);
           if (hit) return hit;
         }
 
@@ -87,10 +95,10 @@ export function createPoloProvider() {
     }
 
     return null;
-  };
+  }
 
-  const postJson = async (path: string, body: any, auth: string) => {
-    const url = `${baseUrl.replace(/\/+$/, "")}${path}`;
+  private async postJson(path: string, body: any, auth: string) {
+    const url = `${this.baseUrl.replace(/\/+$/, "")}${path}`;
     const res = await fetch(url, {
       method: "POST",
       headers: {
@@ -105,26 +113,26 @@ export function createPoloProvider() {
       throw new Error(`HTTP Error: ${res.status} ${text}`);
     }
     return res.json();
-  };
+  }
 
-  const getJson = async (path: string) => {
-    const url = `${baseUrl.replace(/\/+$/, "")}${path}`;
+  private async getJson(path: string) {
+    const url = `${this.baseUrl.replace(/\/+$/, "")}${path}`;
     const res = await fetch(url, {
       method: "GET",
-      headers: { Accept: "application/json", Authorization: videoAuth },
+      headers: { Accept: "application/json", Authorization: this.videoAuth },
     });
     if (!res.ok) {
       const text = await res.text().catch(() => "");
       throw new Error(`HTTP Error: ${res.status} ${text}`);
     }
     return res.json();
-  };
+  }
 
-  const postForm = async (path: string, form: FormData) => {
-    const url = `${baseUrl.replace(/\/+$/, "")}${path}`;
+  private async postForm(path: string, form: FormData) {
+    const url = `${this.baseUrl.replace(/\/+$/, "")}${path}`;
     const res = await fetch(url, {
       method: "POST",
-      headers: { Accept: "application/json", Authorization: videoAuth },
+      headers: { Accept: "application/json", Authorization: this.videoAuth },
       body: form,
     });
     if (!res.ok) {
@@ -132,23 +140,17 @@ export function createPoloProvider() {
       throw new Error(`HTTP Error: ${res.status} ${text}`);
     }
     return res.json();
-  };
+  }
 
-  const generateContent = async (args: {
-    model: string;
-    contents: any;
-    config?: any;
-  }): Promise<GenerateContentResponse> => {
+  async generateContent(args: GenerateContentArgs): Promise<GenerateContentResponse> {
     const { model, contents, config } = args;
 
     const messages: any[] = [];
 
-    // systemInstruction -> system message (keeps behavior w/o SDK)
     if (config?.systemInstruction) {
       messages.push({ role: "system", content: String(config.systemInstruction) });
     }
 
-    // Build user message (supports your { parts: [...] } format)
     if (typeof contents === "string") {
       messages.push({ role: "user", content: contents });
     } else if (contents?.parts && Array.isArray(contents.parts)) {
@@ -168,7 +170,6 @@ export function createPoloProvider() {
       }
       messages.push({ role: "user", content: contentParts.length ? contentParts : "" });
     } else if (Array.isArray(contents)) {
-      // your old compat array: [{text},{inlineData}]
       const contentParts: any[] = [];
       for (const c of contents) {
         if (typeof c?.text === "string") contentParts.push({ type: "text", text: c.text });
@@ -188,7 +189,6 @@ export function createPoloProvider() {
 
     const body: any = { model, stream: false, messages };
 
-    // Pass through image/tts configs for your gateway (best-effort)
     const googleExtra: any = {};
     if (config?.imageConfig) {
       const imageConfig = { ...config.imageConfig };
@@ -205,12 +205,11 @@ export function createPoloProvider() {
       body.extra_body = { ...(body.extra_body || {}), google: googleExtra };
     }
 
-    const auth = isImageModel(model) ? imageAuth : textAuth;
-    const data = await postJson("/v1/chat/completions", body, auth);
+    const auth = this.isImageModel(model) ? this.imageAuth : this.textAuth;
+    const data = await this.postJson("/v1/chat/completions", body, auth);
     const message = data?.choices?.[0]?.message;
 
-    // Try extract inline (image/audio) first
-    const inline = extractInlineB64(message?.content);
+    const inline = this.extractInlineB64(message?.content);
     if (inline) {
       return {
         text: "",
@@ -231,7 +230,6 @@ export function createPoloProvider() {
       };
     }
 
-    // Otherwise extract text
     let text = "";
     if (typeof message?.content === "string") text = message.content;
     else if (Array.isArray(message?.content)) {
@@ -244,24 +242,93 @@ export function createPoloProvider() {
       text,
       candidates: [{ content: { parts: [{ text }] } }],
     };
-  };
+  }
 
-  const generateVideos = async (args: {
-    model: string;
-    prompt: string;
-    image?: { imageBytes: string; mimeType: string };
-    config?: any;
-  }): Promise<VideosOperation> => {
+  async generateVideos(args: GenerateVideosArgs): Promise<VideosOperation> {
     const { model, prompt, image, config } = args;
 
+    // --- Veo3 Chat Format Support (veo3-fast, veo3-pro, veo3-pro-frames) ---
+    if (model.startsWith("veo3-")) {
+      const messages: any[] = [];
+      const content: any[] = [{ type: "text", text: prompt }];
+
+      if (image?.imageBytes) {
+        const mime = image.mimeType || "image/png";
+        const url = `data:${mime};base64,${image.imageBytes}`;
+        content.push({
+          type: "image_url",
+          image_url: { url }
+        });
+      } else if (config?.input_reference) {
+         content.push({
+          type: "image_url",
+          image_url: { url: config.input_reference }
+        });
+      }
+
+      messages.push({ role: "user", content });
+
+      const body: any = {
+        model,
+        stream: false,
+        messages,
+      };
+
+      if (config?.temperature) body.temperature = config.temperature;
+      if (config?.top_p) body.top_p = config.top_p;
+
+      const data = await this.postJson("/v1/chat/completions", body, this.videoAuth);
+      
+      const contentStr = data?.choices?.[0]?.message?.content || "";
+      let videoUrl = "";
+      
+      // Try to extract URL from content if present
+      const urlMatch = contentStr.match(/https?:\/\/[^\s)"]+/);
+      if (urlMatch) videoUrl = urlMatch[0];
+      
+      // If we got a URL immediately, return as done
+      if (videoUrl) {
+          return {
+              done: true,
+              operation: { id: "chat-done", status: "completed" },
+              response: { generatedVideos: [{ video: { uri: videoUrl } }] }
+          };
+      }
+      
+      // If no URL found, return the content as error or partial result?
+      // Or maybe it returns a job ID in content?
+      // Assuming for now it returns URL or fails.
+      return { 
+          done: true, 
+          operation: { id: "chat-done", status: "completed" }, 
+          // If no URL, we might return undefined response, which UI handles as failure or no-op
+          response: undefined,
+          error: "No video URL found in response: " + contentStr.substring(0, 100)
+      };
+    }
+
+    // --- Veo3.1 Standard Format Support (/v1/videos) ---
+    
+    // Auto-map generic model names to Polo-specific ones based on aspect ratio and mode
+    let finalModel = model;
+    if (model === "veo3.1" || model === "veo3.1-components") {
+        const isPortrait = config?.aspectRatio === "9:16";
+        const isStartEnd = model === "veo3.1";
+        
+        if (isPortrait) {
+            finalModel = isStartEnd ? "veo_3_1-portrait-hd-fl" : "veo_3_1-portrait-hd";
+        } else {
+            // Default to landscape (16:9)
+            finalModel = isStartEnd ? "veo_3_1-landscape-hd-fl" : "veo_3_1-landscape-hd";
+        }
+    }
+
     const form = new FormData();
-    form.append("model", model);
+    form.append("model", finalModel);
     form.append("prompt", prompt);
 
-    // keep compatible defaults
     form.append("seconds", String(config?.seconds ?? 8));
 
-    // map aspectRatio/resolution -> size (best-effort)
     const ar = config?.aspectRatio;
     let size = "1280x720";
     if (ar === "9:16") size = "720x1280";
@@ -276,20 +343,19 @@ export function createPoloProvider() {
       form.append("input_reference", blob, "input.png");
     }
 
-    const data = await postForm("/v1/videos", form);
+    const data = await this.postForm("/v1/videos", form);
     const id = data?.id;
     return { done: false, operation: { id }, response: undefined, error: undefined };
-  };
+  }
 
-  const getVideosOperation = async (args: { operation: VideosOperation }): Promise<VideosOperation> => {
+  async getVideosOperation(args: GetVideosOperationArgs): Promise<VideosOperation> {
     const id = args?.operation?.operation?.id;
     if (!id) return args.operation;
 
-    const data = await getJson(`/v1/videos/${encodeURIComponent(id)}`);
+    const data = await this.getJson(`/v1/videos/${encodeURIComponent(id)}`);
     const status = data?.status;
 
     let uri = data?.video_url || data?.url || "";
-    // Make sure caller's `${videoUri}&key=...` won't break when uri has no "?"
     if (uri && !uri.includes("?")) uri = `${uri}?`;
 
     const done = status === "completed" && !!uri;
@@ -300,11 +366,5 @@ export function createPoloProvider() {
       response: done ? { generatedVideos: [{ video: { uri } }] } : undefined,
       error: data?.error,
     };
-  };
-
-  return {
-    models: { generateContent, generateVideos },
-    operations: { getVideosOperation },
-  };
+  }
 }
-// Initialize PoloAI Gateway Client

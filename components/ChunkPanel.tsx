@@ -153,7 +153,7 @@ const ChunkPanel: React.FC<ChunkPanelProps> = ({
       const scenesToProcess = chunk.scenes.filter(s => s.imageUrl && !s.videoUrl);
       
       const MAX_RETRIES = 5;
-      const CONCURRENCY = 10;
+      const CONCURRENCY = 3; // Changed from 10 to 1 to avoid 429 RESOURCE_EXHAUSTED
 
       const processSceneWithRetry = async (scene: Scene) => {
           if (!scene.imageUrl) return;
@@ -164,12 +164,22 @@ const ChunkPanel: React.FC<ChunkPanelProps> = ({
                   const videoUrl = await generateVideo(scene.imageUrl, scene, styleState.aspectRatio, (scene.useAssets !== false) ? chunk.assets : []);
                   onSceneUpdate(chunk.id, scene.id, { videoUrl });
                   return; // Success
-              } catch (e) {
-                  console.warn(`Video Gen failed for scene ${scene.id} (Attempt ${attempt}/${MAX_RETRIES})`, e);
+              } catch (e: any) {
+                  const errorMsg = e?.message || String(e);
+                  console.warn(`Video Gen failed for scene ${scene.id} (Attempt ${attempt}/${MAX_RETRIES})`, errorMsg);
                   lastError = e;
+
+                  // Check for 429 or Quota Exceeded specifically
+                  const isRateLimit = errorMsg.includes("429") || errorMsg.includes("RESOURCE_EXHAUSTED") || errorMsg.includes("quota");
+                  
                   // Backoff delay before retry
+                  // Exponential backoff: 2s, 4s, 8s, 16s, 32s...
+                  // If rate limit, add extra padding
                   if (attempt < MAX_RETRIES) {
-                      await new Promise(resolve => setTimeout(resolve, 2000 * attempt));
+                      const baseDelay = 2000 * Math.pow(2, attempt - 1);
+                      const actualDelay = isRateLimit ? baseDelay * 2 : baseDelay; // Double delay for rate limits
+                      console.log(`Waiting ${actualDelay}ms before retry for scene ${scene.id}...`);
+                      await new Promise(resolve => setTimeout(resolve, actualDelay));
                   }
               }
           }

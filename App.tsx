@@ -637,8 +637,14 @@ const App: React.FC = () => {
 
   const handleAddAsset = (newAsset: Asset) => {
       if (targetChunkId) {
-          // Add only to current chunk
+          // Add to current chunk
           updateChunk(targetChunkId, { assets: [...(targetChunk?.assets || []), newAsset] });
+          
+          // Also sync to global assets so it persists when chunk is closed
+          setGlobalAssets(prev => {
+              if (prev.some(a => a.id === newAsset.id)) return prev;
+              return [...prev, newAsset];
+          });
       } else {
           // Add to global
           setGlobalAssets(prev => [...prev, newAsset]);

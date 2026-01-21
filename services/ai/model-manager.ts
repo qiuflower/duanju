@@ -1,5 +1,6 @@
-import { createPoloProvider } from "./providers/polo";
-import { createT8StarProvider } from "./providers/t8star";
+import { PoloProvider } from "./polo/provider";
+import { T8StarProvider } from "./t8star/provider";
+import { IAIProvider, AIProviderConfig } from "./core/interfaces";
 
 export type ModelType = "text" | "image" | "video";
 export type ProviderType = "polo" | "t8star";
@@ -18,13 +19,24 @@ const DEFAULT_CONFIG: ModelConfig = {
 
 class ModelManager {
   private config: ModelConfig;
-  private polo: ReturnType<typeof createPoloProvider>;
-  private t8star: ReturnType<typeof createT8StarProvider>;
+  private polo: PoloProvider;
+  private t8star: T8StarProvider;
 
   constructor() {
     this.config = this.loadConfig();
-    this.polo = createPoloProvider();
-    this.t8star = createT8StarProvider();
+    
+    const poloConfig: AIProviderConfig = {
+        baseUrl: "/api/polo"
+    };
+    
+    // Use t8star for media as default if not specified otherwise
+    const t8starConfig: AIProviderConfig = {
+        baseUrl: "/api/t8star",
+        mediaBaseUrl: "/api/t8star" 
+    };
+
+    this.polo = new PoloProvider(poloConfig);
+    this.t8star = new T8StarProvider(t8starConfig);
   }
 
   private loadConfig(): ModelConfig {
@@ -49,10 +61,9 @@ class ModelManager {
     return { ...this.config };
   }
 
-  private getProvider(type: ModelType) {
+  private getProvider(type: ModelType): IAIProvider {
     const providerName = this.config[`${type}model` as keyof ModelConfig];
-    // Cast to any to handle slightly different interfaces (e.g. audio missing in polo)
-    return providerName === "polo" ? (this.polo as any) : (this.t8star as any);
+    return providerName === "polo" ? this.polo : this.t8star;
   }
 
   // Determine type based on args
@@ -80,11 +91,11 @@ class ModelManager {
         }
 
         const provider = this.getProviderForContent(args);
-        return provider.models.generateContent(args);
+        return provider.generateContent(args);
       },
       generateVideos: (args: any) => {
         const provider = this.getProvider("video");
-        return provider.models.generateVideos(args);
+        return provider.generateVideos(args);
       },
     };
   }
@@ -93,7 +104,7 @@ class ModelManager {
     return {
       getVideosOperation: (args: any) => {
          const provider = this.getProvider("video");
-         return provider.operations.getVideosOperation(args);
+         return provider.getVideosOperation(args);
       }
     };
   }
@@ -102,7 +113,10 @@ class ModelManager {
     return {
       speech: (body: any) => {
         // Always use t8star for audio as polo doesn't support it in the current interface
-        return this.t8star.audio.speech(body);
+        if (this.t8star.speech) {
+            return this.t8star.speech(body);
+        }
+        throw new Error("Speech generation not supported by T8Star provider");
       }
     };
   }
