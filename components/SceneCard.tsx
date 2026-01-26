@@ -21,10 +21,11 @@ interface SceneCardProps {
   globalStyle: GlobalStyle;
   areAssetsReady?: boolean; // New Prop for workflow enforcement
   assets?: Asset[];
-  onAddAsset?: (asset: Asset) => void;
+  onAddAsset?: (asset: Asset | Asset[]) => void;
   language?: string;
   isOptimizing?: boolean; // New prop to show loading state from parent
   flash?: boolean;
+  chapterScenes?: Scene[]; // New prop for accessing other scenes in the chapter
 }
 
 const SceneCard: React.FC<SceneCardProps> = ({ 
@@ -44,7 +45,8 @@ const SceneCard: React.FC<SceneCardProps> = ({
     onAddAsset,
     language = 'Chinese',
     isOptimizing = false,
-    flash = false
+    flash = false,
+    chapterScenes = []
 }) => {
   const [genStatus, setGenStatus] = useState<ImageGenStatus>(ImageGenStatus.IDLE);
   const [videoStatus, setVideoStatus] = useState<ImageGenStatus>(ImageGenStatus.IDLE);
@@ -110,21 +112,35 @@ const SceneCard: React.FC<SceneCardProps> = ({
           const tempScene = { ...scene, assetIds: newAssetIds };
           let assetsToUse = overrideAssets || assets;
 
-          // Helper: Inject "Current Scene" asset if it's selected but not in the list
-          const currentSceneId = `scene_img_${scene.id}`;
-          if (newAssetIds.includes(currentSceneId)) {
-             // Check if it's already in assetsToUse
-             if (!assetsToUse.find(a => a.id === currentSceneId)) {
-                 const virtualSceneAsset: Asset = {
-                    id: currentSceneId,
-                    name: "Current Scene",
-                    description: "The current generated storyboard image for this scene.",
-                    type: "item",
-                    refImageUrl: scene.imageUrl
-                };
-                assetsToUse = [...assetsToUse, virtualSceneAsset];
+          // Helper: Inject "Scene Image" assets if they are selected but not in the list
+          newAssetIds.forEach(id => {
+             if (id.startsWith('scene_img_') && !assetsToUse.find(a => a.id === id)) {
+                 if (id === `scene_img_${scene.id}`) {
+                     // Current Scene
+                     assetsToUse = [...assetsToUse, {
+                        id: id,
+                        name: "Current Scene",
+                        description: "The current generated storyboard image for this scene.",
+                        type: "item",
+                        refImageUrl: scene.imageUrl
+                    }];
+                 } else {
+                     // Other Scenes
+                     const sceneId = id.replace('scene_img_', '');
+                     const refScene = chapterScenes.find(s => s.id === sceneId);
+                     if (refScene) {
+                         assetsToUse = [...assetsToUse, {
+                             id: id,
+                             name: `Scene ${refScene.id}`,
+                             description: refScene.visual_desc || "Generated storyboard",
+                             type: "item",
+                             refImageUrl: refScene.imageUrl,
+                             refImageAssetId: refScene.imageAssetId
+                         }];
+                     }
+                 }
              }
-          }
+          });
           
           // Direct Update without Review
           const optimized = await updateVideoPromptDirectly(tempScene, language, assetsToUse, globalStyle);
@@ -181,7 +197,38 @@ const SceneCard: React.FC<SceneCardProps> = ({
       try {
           // Create temp scene for API call
           const tempScene = { ...scene, assetIds: newAssetIds };
-          const assetsToUse = overrideAssets || assets;
+          let assetsToUse = overrideAssets || assets;
+
+          // Helper: Inject "Scene Image" assets if they are selected but not in the list
+          newAssetIds.forEach(id => {
+             if (id.startsWith('scene_img_') && !assetsToUse.find(a => a.id === id)) {
+                 if (id === `scene_img_${scene.id}`) {
+                     // Current Scene
+                     assetsToUse = [...assetsToUse, {
+                        id: id,
+                        name: "Current Scene",
+                        description: "The current generated storyboard image for this scene.",
+                        type: "item",
+                        refImageUrl: scene.imageUrl
+                    }];
+                 } else {
+                     // Other Scenes
+                     const sceneId = id.replace('scene_img_', '');
+                     const refScene = chapterScenes.find(s => s.id === sceneId);
+                     if (refScene) {
+                         assetsToUse = [...assetsToUse, {
+                             id: id,
+                             name: `Scene ${refScene.id}`,
+                             description: refScene.visual_desc || "Generated storyboard",
+                             type: "item",
+                             refImageUrl: refScene.imageUrl,
+                             refImageAssetId: refScene.imageAssetId
+                         }];
+                     }
+                 }
+             }
+          });
+
           const newPrompt = await regenerateScenePrompt(tempScene, assetsToUse, globalStyle, language);
           onUpdate(scene.id, 'np_prompt', newPrompt);
       } catch (e) {
@@ -230,14 +277,24 @@ const SceneCard: React.FC<SceneCardProps> = ({
       onUpdate(scene.id, field, value);
   };
 
-  const handleAddAsset = (assetId: string, newAsset?: Asset) => {
+  const handleAddAsset = (assetId: string | string[], newAsset?: Asset | Asset[]) => {
+    // Normalize input to arrays
+    const assetIdsToAdd = Array.isArray(assetId) ? assetId : [assetId];
+    const newAssetsToAdd = newAsset ? (Array.isArray(newAsset) ? newAsset : [newAsset]) : [];
+
     // Determine which list to update based on active selector
     if (activeAssetSelector === 'video') {
         if (scene.isStartEndFrameMode) {
             // --- START/END FRAME MODE ---
             // Requirement: Add Asset = Set End Frame
+            // Only take the first one if multiple are selected (Start/End mode supports max 1 end frame usually?)
+            // Actually Start/End is strictly [Start, End].
+            // If multiple selected, maybe just take the last one or first one?
+            // Let's assume user wants to set the End Frame.
+            
+            const targetAssetId = assetIdsToAdd[0];
             const currentSceneImgId = `scene_img_${scene.id}`;
-            const newIds = [currentSceneImgId, assetId];
+            const newIds = [currentSceneImgId, targetAssetId];
             
             // Backup current prompt before update
             onUpdate(scene.id, 'video_prompt_backup', scene.video_prompt);
@@ -245,8 +302,8 @@ const SceneCard: React.FC<SceneCardProps> = ({
             // Update Start/End Asset IDs
             onUpdate(scene.id, 'startEndAssetIds', newIds);
             
-            // Trigger Prompt Update (Requirement: Only on user ADD reference image)
-            const assetsToUse = newAsset ? [...assets, newAsset] : assets;
+            // Trigger Prompt Update
+            const assetsToUse = newAssetsToAdd.length > 0 ? [...assets, ...newAssetsToAdd] : assets;
             // Use Schedule for batching
             scheduleAssetUpdate(newIds, assetsToUse, 'video');
             
@@ -254,26 +311,34 @@ const SceneCard: React.FC<SceneCardProps> = ({
             // --- STANDARD MODE ---
             const currentVideoIds = scene.videoAssetIds || scene.assetIds?.slice(0, 3) || [];
             
-            if (currentVideoIds.length >= 3) {
-                alert("Video storyboard supports a maximum of 3 reference assets.");
+            // Validation: Check Max 3 Limit
+            // Current + New (excluding duplicates)
+            const uniqueNewIds = assetIdsToAdd.filter(id => !currentVideoIds.includes(id));
+            
+            if (currentVideoIds.length + uniqueNewIds.length > 3) {
+                alert(language === 'Chinese' 
+                    ? `视频参考图最多只能添加3张 (当前已选${currentVideoIds.length}张, 尝试添加${uniqueNewIds.length}张)` 
+                    : `Video storyboard supports a maximum of 3 reference assets (Current: ${currentVideoIds.length}, Adding: ${uniqueNewIds.length})`);
                 return;
             }
     
-            if (!currentVideoIds.includes(assetId)) {
-                const newIds = [...currentVideoIds, assetId];
-                const assetsToUse = newAsset ? [...assets, newAsset] : assets;
-                
+            if (uniqueNewIds.length > 0) {
+                const newIds = [...currentVideoIds, ...uniqueNewIds];
+                const assetsToUse = newAssetsToAdd.length > 0 ? [...assets, ...newAssetsToAdd] : assets;
+
                 // Only update Video Prompt and Video Asset IDs
                 onUpdate(scene.id, 'videoAssetIds', newIds);
                 scheduleAssetUpdate(newIds, assetsToUse, 'video');
             }
         }
     } else {
-        // Image Mode (Original Behavior)
+        // Image Mode (Original Behavior) - Unlimited
         const currentIds = scene.assetIds || [];
-        if (!currentIds.includes(assetId)) {
-            const newIds = [...currentIds, assetId];
-            const assetsToUse = newAsset ? [...assets, newAsset] : assets;
+        const uniqueNewIds = assetIdsToAdd.filter(id => !currentIds.includes(id));
+
+        if (uniqueNewIds.length > 0) {
+            const newIds = [...currentIds, ...uniqueNewIds];
+            const assetsToUse = newAssetsToAdd.length > 0 ? [...assets, ...newAssetsToAdd] : assets;
             
             onUpdate(scene.id, 'assetIds', newIds); // Update UI immediately
             scheduleAssetUpdate(newIds, assetsToUse, 'image');
@@ -422,7 +487,7 @@ const SceneCard: React.FC<SceneCardProps> = ({
           url = await onGenerateImageOverride(scene);
       } else {
           // Fallback if no override provided, though App usually provides it
-          url = await generateSceneImage(scene.np_prompt, characterDesc, globalStyle, [], scene.assetIds);
+           url = await generateSceneImage(scene.np_prompt, characterDesc, globalStyle, [], scene.assetIds);
       }
       setGenStatus(ImageGenStatus.COMPLETED);
       if (onImageGenerated) {
@@ -567,6 +632,19 @@ const SceneCard: React.FC<SceneCardProps> = ({
         handleGenerateImage(true);
     }
   };
+
+  const sceneImages = React.useMemo(() => {
+      return chapterScenes
+          .filter(s => !!(s.imageUrl || s.imageAssetId)) 
+          .map(s => ({
+              id: `scene_img_${s.id}`,
+              name: `Scene ${s.id}`,
+              description: s.visual_desc || "Generated storyboard",
+              type: 'item' as const, 
+              refImageUrl: s.imageUrl,
+              refImageAssetId: s.imageAssetId
+          }));
+  }, [chapterScenes]);
 
   return (
     <div className={`bg-dark-800 rounded-xl border border-white/10 overflow-hidden shadow-lg hover:border-banana-500/30 transition-colors duration-300 relative ${flash ? 'ring-2 ring-banana-400/60 animate-pulse' : ''}`}>
@@ -978,6 +1056,27 @@ const SceneCard: React.FC<SceneCardProps> = ({
                                                 }
 
                                                 const asset = assets.find(a => a.id === assetId);
+                                                
+                                                if (!asset && assetId.startsWith('scene_img_')) {
+                                                     const refId = assetId.replace('scene_img_', '');
+                                                     const refScene = chapterScenes.find(s => s.id === refId);
+                                                     if (refScene) {
+                                                         return (
+                                                            <div key={assetId} className="flex items-center gap-1 bg-indigo-500/10 border border-indigo-500/20 rounded px-1.5 py-0.5 text-[10px] text-indigo-200 animate-fadeIn">
+                                                                <ImageIcon className="w-2.5 h-2.5 opacity-70" />
+                                                                <span className="max-w-[80px] truncate" title={`Scene ${refId}`}>Scene {refId}</span>
+                                                                <button 
+                                                                    onClick={() => handleRemoveAsset(assetId, 'video')}
+                                                                    className="hover:text-white ml-1 transition-colors"
+                                                                    title="Remove Reference"
+                                                                >
+                                                                    <X className="w-2.5 h-2.5" /> 
+                                                                </button>
+                                                            </div>
+                                                         );
+                                                     }
+                                                }
+
                                                 if (!asset) return null;
 
                                                 return (
@@ -1053,6 +1152,27 @@ const SceneCard: React.FC<SceneCardProps> = ({
                             )}
                             {(scene.assetIds || []).map(assetId => {
                                 const asset = assets.find(a => a.id === assetId);
+                                
+                                if (!asset && assetId.startsWith('scene_img_')) {
+                                     const refId = assetId.replace('scene_img_', '');
+                                     const refScene = chapterScenes.find(s => s.id === refId);
+                                     if (refScene) {
+                                         return (
+                                            <div key={assetId} className="flex items-center gap-1 bg-indigo-500/10 border border-indigo-500/20 rounded px-1.5 py-0.5 text-[10px] text-indigo-200 animate-fadeIn">
+                                                <ImageIcon className="w-2.5 h-2.5 opacity-70" />
+                                                <span className="max-w-[80px] truncate" title={`Scene ${refId}`}>Scene {refId}</span>
+                                                <button 
+                                                    onClick={() => handleRemoveAsset(assetId)}
+                                                    className="hover:text-white ml-1 transition-colors"
+                                                    title="Remove Reference"
+                                                >
+                                                    <X className="w-2.5 h-2.5" /> 
+                                                </button>
+                                            </div>
+                                         );
+                                     }
+                                }
+
                                 return (
                                     <div key={assetId} className="flex items-center gap-1 bg-purple-500/10 border border-purple-500/20 rounded px-1.5 py-0.5 text-[10px] text-purple-200 animate-fadeIn">
                                         <LinkIcon className="w-2.5 h-2.5 opacity-70" />
@@ -1181,6 +1301,7 @@ const SceneCard: React.FC<SceneCardProps> = ({
             onSelect={handleAddAsset}
             onClose={() => setActiveAssetSelector('none')}
             onAssetCreated={onAddAsset}
+            maxSelections={activeAssetSelector === 'video' && !scene.isStartEndFrameMode ? 3 : undefined}
             extraAssets={scene.imageUrl ? [{
                 id: `scene_img_${scene.id}`,
                 name: "Current Scene",
@@ -1188,6 +1309,7 @@ const SceneCard: React.FC<SceneCardProps> = ({
                 type: "item", // Using item as a generic type for scene reference
                 refImageUrl: scene.imageUrl
             }] : []}
+            sceneImages={sceneImages}
           />
       )}
     </div>

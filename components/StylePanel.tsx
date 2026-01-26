@@ -208,6 +208,30 @@ const StylePanel: React.FC<StylePanelProps> = ({ styleState, onStyleChange, labe
                     />
                     <span className="text-xs font-mono w-4 text-right">{current.strength}</span>
                 </div>
+
+                {/* Checkbox for Reference Work only */}
+                {type === 'work' && (
+                    <div className="flex items-center gap-2 mt-2 pt-2 border-t border-white/5">
+                         <input 
+                            type="checkbox"
+                            id="useOriginalCharacters"
+                            checked={current.useOriginalCharacters || false}
+                            onChange={(e) => updateSetting(type, 'useOriginalCharacters', e.target.checked)}
+                            className="w-3.5 h-3.5 rounded border-gray-600 text-banana-500 focus:ring-banana-500 bg-gray-700/50 cursor-pointer accent-banana-500"
+                         />
+                         <label htmlFor="useOriginalCharacters" className="text-xs text-gray-400 select-none cursor-pointer hover:text-banana-400 transition-colors">
+                            {language === 'Chinese' ? '影视剧人物/场景/物品1:1还原' : '1:1 Restore Characters/Scenes/Items'}
+                         </label>
+                         <div className="group relative ml-1">
+                            <Info className="w-3 h-3 text-gray-600 cursor-help" />
+                            <div className="absolute left-0 bottom-full mb-2 w-48 bg-black/90 text-gray-300 text-[10px] p-2 rounded hidden group-hover:block z-50 pointer-events-none">
+                                {language === 'Chinese' 
+                                    ? '若勾选，系统会自动识别剧本中出现的角色、场景及物品，并在生成资产时自动添加"影视剧《作品名》... 1:1还原"及原影视造型的提示词。' 
+                                    : 'If checked, system will detect characters, scenes, and items, and append "Movie/TV Series《Work》... 1:1 Restore" and original film/TV styling details to asset prompts.'}
+                            </div>
+                        </div>
+                    </div>
+                )}
             </div>
 
             {/* Image Upload for Texture */}

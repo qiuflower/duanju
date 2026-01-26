@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { AnalysisStatus, Scene, Asset, GlobalStyle, NovelChunk } from './types';
 import { analyzeNovelText, extractAssets, generateSceneImage } from './services/gemini';
 import { translations } from './translations';
@@ -6,6 +6,7 @@ import { saveState, loadState, clearState, loadAssetUrl, saveAsset } from './ser
 import InputPanel from './components/InputPanel';
 import ChunkPanel from './components/ChunkPanel';
 import ModelSelector from './components/ModelSelector';
+import { AssetSelector } from './components/AssetSelector';
 import { Film, AlertCircle, Globe, Video, Book, Trash2, PlayCircle, PauseCircle, Upload } from 'lucide-react';
 import JSZip from 'jszip';
 
@@ -40,6 +41,7 @@ const App: React.FC = () => {
   const [activeChunkId, setActiveChunkId] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [flashScene, setFlashScene] = useState<{ chunkId: string; sceneId: string } | null>(null);
+  const [showGlobalSelector, setShowGlobalSelector] = useState(false);
   const undoStackRef = useRef<HistoryAction[]>([]);
   const redoStackRef = useRef<HistoryAction[]>([]);
 
@@ -527,8 +529,10 @@ const App: React.FC = () => {
      try {
          const workStyle = globalStyle.work.custom || (globalStyle.work.selected !== 'None' ? globalStyle.work.selected : '');
          const textureStyle = globalStyle.texture.custom || (globalStyle.texture.selected !== 'None' ? globalStyle.texture.selected : '');
+         const useOriginalCharacters = globalStyle.work.useOriginalCharacters || false;
+         
          // Use ref to get latest assets to avoid duplicates
-         const result = await extractAssets(chunk.text, language, globalAssetsRef.current, workStyle, textureStyle);
+         const result = await extractAssets(chunk.text, language, globalAssetsRef.current, workStyle, textureStyle, useOriginalCharacters);
          
          if (result.visualDna) {
             setGlobalStyle(prev => ({ ...prev, visualTags: result.visualDna }));
@@ -570,8 +574,10 @@ const App: React.FC = () => {
      try {
          const workStyle = globalStyle.work.custom || (globalStyle.work.selected !== 'None' ? globalStyle.work.selected : '');
          const textureStyle = globalStyle.texture.custom || (globalStyle.texture.selected !== 'None' ? globalStyle.texture.selected : '');
+         const useOriginalCharacters = globalStyle.work.useOriginalCharacters || false;
+
          // Use ref to pass latest assets to prompt
-         const result = await extractAssets(text, language, globalAssetsRef.current, workStyle, textureStyle);
+         const result = await extractAssets(text, language, globalAssetsRef.current, workStyle, textureStyle, useOriginalCharacters);
          
          if (result.visualDna) {
             setGlobalStyle(prev => ({ ...prev, visualTags: result.visualDna }));
@@ -755,8 +761,43 @@ const App: React.FC = () => {
   // Fallback to global.
   const targetChunkId = expandedId || activeChunkId;
   const targetChunk = targetChunkId ? chunks.find(c => c.id === targetChunkId) : null;
-  // Fix: Fallback to global assets if target chunk has no assets to ensure visibility and context
-  const displayedAssets = (targetChunk && targetChunk.assets.length > 0) ? targetChunk.assets : globalAssets;
+  // 智能资产显示逻辑：
+  // 1. 基础：显示当前章节的资产（如果选中了章节）。如果没选中任何章节，则显示全局资产。
+  // 2. 增强：如果选中了章节，还要自动扫描并显示该章节场景中“借用”的外部资产（即场景用了但不在章节资产列表里的）。
+  const displayedAssets = useMemo(() => {
+      if (!targetChunk) return globalAssets;
+
+      // 1. 基础列表：当前章节的资产
+      const chunkAssets = targetChunk.assets;
+      const chunkAssetIds = new Set(chunkAssets.map(a => a.id));
+
+      // 2. 收集场景中引用的所有资产ID
+      const usedAssetIds = new Set<string>();
+      targetChunk.scenes.forEach(scene => {
+          if (scene.assetIds) scene.assetIds.forEach(id => usedAssetIds.add(id));
+          if (scene.videoAssetIds) scene.videoAssetIds.forEach(id => usedAssetIds.add(id));
+          if (scene.imageAssetId) usedAssetIds.add(scene.imageAssetId);
+          if (scene.videoAssetId) usedAssetIds.add(scene.videoAssetId);
+      });
+
+      // 3. 找出“借用”的资产（在场景里用了，但在当前章节资产列表里没有）
+      const borrowedAssets: Asset[] = [];
+      usedAssetIds.forEach(id => {
+          // 排除不需要显示的虚拟ID或空ID
+          if (!id || id.startsWith('scene_img_')) return;
+
+          if (!chunkAssetIds.has(id)) {
+              // 从全局里找
+              const found = globalAssets.find(ga => ga.id === id);
+              if (found) {
+                  borrowedAssets.push(found);
+              }
+          }
+      });
+
+      // 4. 合并并返回
+      return [...chunkAssets, ...borrowedAssets];
+  }, [targetChunk, globalAssets]);
 
   // IMPORTANT: Pass the context-aware assets and explicit scene data to generation
   const handleGenerateImageWrapper = async (scene: Scene, chunkAssets?: Asset[]) => {
@@ -767,25 +808,33 @@ const App: React.FC = () => {
   };
 
   const handleUpdateAsset = (updatedAsset: Asset) => {
-      // If we are viewing a specific chunk, update ONLY that chunk's assets
-      if (targetChunkId) {
-          setChunks(prev => prev.map(chunk => {
-              if (chunk.id !== targetChunkId) return chunk;
+      // 1. 总是更新全局资产（真理之源）
+      setGlobalAssets(prev => prev.map(a => a.id === updatedAsset.id ? updatedAsset : a));
+
+      // 2. 同步更新所有包含该资产的章节
+      // 逻辑：
+      // A. 如果章节里已有该资产 -> 必须更新（无论是否当前章节）
+      // B. 如果章节里没有该资产 -> 只有是当前聚焦章节（targetChunkId）时才新增
+      setChunks(prev => prev.map(chunk => {
+          const exists = chunk.assets.some(a => a.id === updatedAsset.id);
+          
+          if (exists) {
+              // 场景A：已存在 -> 更新（广播同步）
               return {
                   ...chunk,
                   assets: chunk.assets.map(a => a.id === updatedAsset.id ? updatedAsset : a)
               };
-          }));
-          // Also sync to global if it exists there (optional, but keeps consistency)
-          setGlobalAssets(prev => prev.map(a => a.id === updatedAsset.id ? updatedAsset : a));
-      } else {
-          // Fallback: Update global and sync to all chunks (old behavior)
-          setGlobalAssets(prev => prev.map(a => a.id === updatedAsset.id ? updatedAsset : a));
-          setChunks(prev => prev.map(chunk => ({
-              ...chunk,
-              assets: chunk.assets.map(a => a.id === updatedAsset.id ? updatedAsset : a)
-          })));
-      }
+          } else if (chunk.id === targetChunkId) {
+              // 场景B：不存在且是当前章节 -> 新增（绑定到当前章节）
+              return {
+                  ...chunk,
+                  assets: [...chunk.assets, updatedAsset]
+              };
+          }
+          
+          // 其他情况保持不变
+          return chunk;
+      }));
   };
 
   const handleAddAsset = (newAsset: Asset) => {
@@ -957,6 +1006,7 @@ const App: React.FC = () => {
             language={language}
             autoAssetTrigger={autoAssetTrigger}
             onAssetBatchComplete={handleAssetBatchComplete}
+            onImportFromGlobal={targetChunkId ? () => setShowGlobalSelector(true) : undefined}
           />
         </div>
 
@@ -1003,6 +1053,28 @@ const App: React.FC = () => {
 
         </div>
       </main>
+
+      {showGlobalSelector && (
+          <AssetSelector 
+              assets={globalAssets}
+              onClose={() => setShowGlobalSelector(false)}
+              onSelect={() => {}} 
+              allowMultiple={true}
+              selectedIds={targetChunk?.assets.map(a => a.id) || []}
+              onConfirm={(selectedIds) => {
+                  if (targetChunkId && targetChunk) {
+                      const newAssets = globalAssets.filter(a => selectedIds.includes(a.id));
+                      const existingIds = new Set(targetChunk.assets.map(a => a.id));
+                      const uniqueNew = newAssets.filter(a => !existingIds.has(a.id));
+                      
+                      if (uniqueNew.length > 0) {
+                          updateChunk(targetChunkId, { assets: [...targetChunk.assets, ...uniqueNew] });
+                      }
+                  }
+                  setShowGlobalSelector(false);
+              }}
+          />
+      )}
     </div>
   );
 };

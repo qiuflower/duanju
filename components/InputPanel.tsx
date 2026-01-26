@@ -22,6 +22,7 @@ interface InputPanelProps {
   language?: string;
   autoAssetTrigger?: boolean;
   onAssetBatchComplete?: () => void;
+  onImportFromGlobal?: () => void;
 }
 
 const InputPanel: React.FC<InputPanelProps> = ({ 
@@ -39,7 +40,8 @@ const InputPanel: React.FC<InputPanelProps> = ({
     onStyleChange,
     language = "Chinese",
     autoAssetTrigger = false,
-    onAssetBatchComplete
+    onAssetBatchComplete,
+    onImportFromGlobal
 }) => {
   const [text, setText] = useState('');
   const [activeTab, setActiveTab] = useState<'style' | 'script' | 'assets'>('style');
@@ -185,6 +187,7 @@ const InputPanel: React.FC<InputPanelProps> = ({
                 currentStyle={styleState}
                 autoStart={autoAssetTrigger}
                 onBatchComplete={onAssetBatchComplete}
+                onImportFromGlobal={onImportFromGlobal}
             />
          </div>
 

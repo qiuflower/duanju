@@ -5,76 +5,154 @@ import { LazyMedia } from './LazyMedia';
 
 interface AssetSelectorProps {
   assets: Asset[];
-  onSelect: (assetId: string, asset?: Asset) => void;
+  onSelect: (assetId: string | string[], asset?: Asset | Asset[]) => void;
   onClose: () => void;
-  onAssetCreated?: (asset: Asset) => void;
+  onAssetCreated?: (asset: Asset | Asset[]) => void;
   selectedIds?: string[];
   extraAssets?: Asset[]; // New prop for temporary assets like current scene image
+  sceneImages?: Asset[]; // New prop for chapter scene images
+  allowMultiple?: boolean;
+  maxSelections?: number; // Optional limit for selections
+  onConfirm?: (selectedIds: string[]) => void;
 }
 
-export const AssetSelector: React.FC<AssetSelectorProps> = ({ assets, onSelect, onClose, onAssetCreated, selectedIds = [], extraAssets = [] }) => {
+export const AssetSelector: React.FC<AssetSelectorProps> = ({ 
+    assets, 
+    onSelect, 
+    onClose, 
+    onAssetCreated, 
+    selectedIds = [], 
+    extraAssets = [],
+    sceneImages = [],
+    allowMultiple = true, // Default to true for better UX
+    maxSelections,
+    onConfirm
+}) => {
+  const [activeTab, setActiveTab] = React.useState<'assets' | 'scenes'>('assets');
   const [search, setSearch] = React.useState('');
-  const [pendingUpload, setPendingUpload] = React.useState<{ base64: string; name: string } | null>(null);
+  const [pendingUploads, setPendingUploads] = React.useState<{ base64: string; name: string }[]>([]);
+  const [currentUploadIdx, setCurrentUploadIdx] = React.useState<number>(0);
+  const [createdAssets, setCreatedAssets] = React.useState<Asset[]>([]);
   const [newAssetInfo, setNewAssetInfo] = React.useState<{ name: string; description: string; type: Asset['type'] }>({
       name: '',
       description: '',
       type: 'character'
   });
+  const [multiSelection, setMultiSelection] = React.useState<Set<string>>(new Set());
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Combine regular assets with extra assets (ensuring no duplicates if IDs clash)
-  const allAssets = [...extraAssets, ...assets];
+  const currentTabAssets = activeTab === 'assets' 
+      ? [...extraAssets, ...assets]
+      : sceneImages;
   
-  const filteredAssets = allAssets.filter(a => 
+  const filteredAssets = currentTabAssets.filter(a => 
     a.name.toLowerCase().includes(search.toLowerCase()) || 
     a.description.toLowerCase().includes(search.toLowerCase())
   );
 
-  const handleUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-      const file = e.target.files?.[0];
-      if (!file) return;
+  const toggleSelection = (id: string) => {
+      const next = new Set(multiSelection);
+      if (next.has(id)) {
+          next.delete(id);
+      } else {
+          // Check limit
+          if (maxSelections && (selectedIds.length + next.size >= maxSelections)) {
+              alert(`Maximum ${maxSelections} items allowed.`);
+              return;
+          }
+          next.add(id);
+      }
+      setMultiSelection(next);
+  };
 
-      const reader = new FileReader();
-      reader.onload = (event) => {
-          const base64 = event.target?.result as string;
-          setPendingUpload({ base64, name: file.name.split('.')[0] });
-          setNewAssetInfo({
-              name: file.name.split('.')[0],
-              description: '',
-              type: 'character'
-          });
-      };
-      reader.readAsDataURL(file);
-      // Reset input so same file can be selected again if cancelled
+  const handleConfirmSelection = () => {
+      const selectedArr = Array.from(multiSelection);
+      const selectedAssets = [...extraAssets, ...assets, ...sceneImages].filter(a => selectedArr.includes(a.id));
+      onSelect(selectedArr, selectedAssets);
+  };
+
+  const handleUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+      const files = e.target.files;
+      if (!files || files.length === 0) return;
+
+      // Validation: Check Max Selections if applicable
+      if (maxSelections && (selectedIds.length + multiSelection.size + files.length > maxSelections)) {
+          alert(`Adding these files would exceed the limit of ${maxSelections} total references.`);
+          e.target.value = '';
+          return;
+      }
+
+      const fileList = Array.from(files);
+      const newUploads: { base64: string; name: string }[] = [];
+      let processed = 0;
+
+      fileList.forEach((file: File) => {
+          const reader = new FileReader();
+          reader.onload = (event) => {
+              const base64 = event.target?.result as string;
+              newUploads.push({ base64, name: file.name.split('.')[0] });
+              processed++;
+              if (processed === fileList.length) {
+                  setPendingUploads(newUploads);
+                  setCurrentUploadIdx(0);
+                  setCreatedAssets([]);
+                  setNewAssetInfo({
+                      name: newUploads[0].name,
+                      description: '',
+                      type: 'character'
+                  });
+              }
+          };
+          reader.readAsDataURL(file);
+      });
+      
       e.target.value = '';
   };
 
-  const handleConfirmUpload = () => {
-      if (!pendingUpload) return;
-
+  const handleConfirmCurrentUpload = () => {
+      const current = pendingUploads[currentUploadIdx];
       const newAsset: Asset = {
-          id: `custom_${Date.now()}`,
-          name: newAssetInfo.name || pendingUpload.name,
+          id: `custom_${Date.now()}_${currentUploadIdx}`,
+          name: newAssetInfo.name || current.name,
           description: newAssetInfo.description || 'Custom uploaded reference image',
           type: newAssetInfo.type,
-          refImageUrl: pendingUpload.base64
+          refImageUrl: current.base64
       };
 
-      if (onAssetCreated) {
-          onAssetCreated(newAsset);
-          onSelect(newAsset.id, newAsset);
+      const updatedCreated = [...createdAssets, newAsset];
+      setCreatedAssets(updatedCreated);
+
+      if (currentUploadIdx < pendingUploads.length - 1) {
+          const nextIdx = currentUploadIdx + 1;
+          setCurrentUploadIdx(nextIdx);
+          setNewAssetInfo({
+              name: pendingUploads[nextIdx].name,
+              description: '',
+              type: 'character'
+          });
+      } else {
+          // All done
+          if (onAssetCreated) {
+              onAssetCreated(updatedCreated);
+              onSelect(updatedCreated.map(a => a.id), updatedCreated);
+          }
+          setPendingUploads([]);
+          setCreatedAssets([]);
       }
-      setPendingUpload(null);
   };
 
-  if (pendingUpload) {
+  if (pendingUploads.length > 0) {
+      const current = pendingUploads[currentUploadIdx];
       return (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
             <div className="bg-gray-900 border border-white/10 rounded-xl w-full max-w-md p-6 shadow-2xl space-y-4">
-                <h3 className="text-lg font-bold text-white">New Asset Details</h3>
+                <div className="flex justify-between items-center">
+                    <h3 className="text-lg font-bold text-white">New Asset ({currentUploadIdx + 1}/{pendingUploads.length})</h3>
+                    <span className="text-xs text-gray-500 font-mono">{current.name}</span>
+                </div>
                 
                 <div className="flex justify-center bg-black/40 rounded-lg p-4 border border-white/5">
-                    <img src={pendingUpload.base64} alt="Preview" className="h-40 object-contain rounded" />
+                    <img src={current.base64} alt="Preview" className="h-40 object-contain rounded" />
                 </div>
 
                 <div className="space-y-3">
@@ -111,16 +189,16 @@ export const AssetSelector: React.FC<AssetSelectorProps> = ({ assets, onSelect, 
 
                 <div className="flex justify-end gap-2 pt-2">
                     <button 
-                        onClick={() => setPendingUpload(null)}
+                        onClick={() => setPendingUploads([])}
                         className="px-4 py-2 text-gray-400 hover:text-white transition-colors"
                     >
-                        Cancel
+                        Cancel All
                     </button>
                     <button 
-                        onClick={handleConfirmUpload}
+                        onClick={handleConfirmCurrentUpload}
                         className="px-4 py-2 bg-banana-500 text-black font-bold rounded hover:bg-banana-400 transition-colors"
                     >
-                        Create Asset
+                        {currentUploadIdx === pendingUploads.length - 1 ? 'Finish & Add' : 'Next Asset'}
                     </button>
                 </div>
             </div>
@@ -133,10 +211,46 @@ export const AssetSelector: React.FC<AssetSelectorProps> = ({ assets, onSelect, 
       <div className="bg-gray-900 border border-white/10 rounded-xl w-full max-w-2xl max-h-[80vh] flex flex-col shadow-2xl">
         <div className="p-4 border-b border-white/10 flex justify-between items-center">
           <h3 className="text-sm font-bold text-white uppercase tracking-wider">Select Reference Asset</h3>
-          <button onClick={onClose} className="text-gray-400 hover:text-white transition-colors">
-            <X className="w-5 h-5" />
-          </button>
+          <div className="flex items-center gap-2">
+            {allowMultiple && multiSelection.size > 0 && (
+                 <button 
+                    onClick={handleConfirmSelection}
+                    className="bg-banana-500 text-black text-xs font-bold px-3 py-1.5 rounded hover:bg-banana-400 transition-colors"
+                 >
+                    Confirm ({multiSelection.size})
+                 </button>
+            )}
+            <button onClick={onClose} className="text-gray-400 hover:text-white transition-colors">
+                <X className="w-5 h-5" />
+            </button>
+          </div>
         </div>
+
+        {/* Tabs */}
+        {sceneImages.length > 0 && (
+            <div className="flex border-b border-white/10">
+                <button 
+                    onClick={() => setActiveTab('assets')}
+                    className={`flex-1 py-3 text-xs font-bold uppercase tracking-wider transition-colors ${
+                        activeTab === 'assets' 
+                        ? 'bg-white/5 text-banana-500 border-b-2 border-banana-500' 
+                        : 'text-gray-500 hover:text-white hover:bg-white/5'
+                    }`}
+                >
+                    Assets Library
+                </button>
+                <button 
+                    onClick={() => setActiveTab('scenes')}
+                    className={`flex-1 py-3 text-xs font-bold uppercase tracking-wider transition-colors ${
+                        activeTab === 'scenes' 
+                        ? 'bg-white/5 text-banana-500 border-b-2 border-banana-500' 
+                        : 'text-gray-500 hover:text-white hover:bg-white/5'
+                    }`}
+                >
+                    Storyboards ({sceneImages.length})
+                </button>
+            </div>
+        )}
         
         <div className="p-4 border-b border-white/10 flex gap-2">
             <div className="relative flex-1">
@@ -155,6 +269,7 @@ export const AssetSelector: React.FC<AssetSelectorProps> = ({ assets, onSelect, 
                 onChange={handleUpload} 
                 className="hidden" 
                 accept="image/*"
+                multiple={allowMultiple}
             />
             <button 
                 onClick={() => fileInputRef.current?.click()}
@@ -167,16 +282,26 @@ export const AssetSelector: React.FC<AssetSelectorProps> = ({ assets, onSelect, 
 
         <div className="flex-1 overflow-y-auto p-4 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
           {filteredAssets.map(asset => {
-            const isSelected = selectedIds.includes(asset.id);
+            const isDisabled = selectedIds.includes(asset.id);
+            const isSelected = multiSelection.has(asset.id);
+            
             return (
                 <button
                     key={asset.id}
-                    onClick={() => onSelect(asset.id)}
-                    disabled={isSelected}
+                    onClick={() => {
+                        if (allowMultiple) {
+                            toggleSelection(asset.id);
+                        } else {
+                            onSelect(asset.id, asset);
+                        }
+                    }}
+                    disabled={isDisabled}
                     className={`group relative aspect-square rounded-lg overflow-hidden border transition-all text-left ${
-                        isSelected 
-                        ? 'border-banana-500 opacity-50 cursor-not-allowed' 
-                        : 'border-white/5 hover:border-banana-500/50 hover:scale-[1.02]'
+                        isDisabled
+                        ? 'border-white/10 opacity-30 cursor-not-allowed' 
+                        : isSelected 
+                            ? 'border-banana-500 ring-1 ring-banana-500'
+                            : 'border-white/5 hover:border-banana-500/50 hover:scale-[1.02]'
                     }`}
                 >
                     {asset.refImageUrl || asset.refImageAssetId ? (
@@ -197,9 +322,13 @@ export const AssetSelector: React.FC<AssetSelectorProps> = ({ assets, onSelect, 
                         <div className="text-xs font-bold text-white truncate">{asset.name}</div>
                         <div className="text-[10px] text-gray-400 capitalize">{asset.type}</div>
                     </div>
-                    {isSelected && (
+                    {(isDisabled || isSelected) && (
                         <div className="absolute inset-0 flex items-center justify-center bg-black/50">
-                            <span className="text-banana-500 font-bold text-xs bg-black/80 px-2 py-1 rounded">Selected</span>
+                            {isDisabled ? (
+                                <span className="text-gray-400 font-bold text-xs bg-black/80 px-2 py-1 rounded">Added</span>
+                            ) : (
+                                <span className="text-banana-500 font-bold text-xs bg-black/80 px-2 py-1 rounded">Selected</span>
+                            )}
                         </div>
                     )}
                 </button>

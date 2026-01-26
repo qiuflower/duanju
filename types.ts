@@ -84,6 +84,7 @@ export interface StyleSetting {
   strength: number; 
   seed: string; 
   options: string[]; 
+  useOriginalCharacters?: boolean; // Checkbox: Whether to use original characters from the reference work
 }
 
 export interface GlobalStyle {

@@ -259,23 +259,51 @@ export const constructVideoPrompt = (scene: Scene, globalStyle?: GlobalStyle): s
   // Always ensure Global Style is prepended if available
   const stylePrefix = globalStyle?.visualTags ? `${globalStyle.visualTags}. ` : "";
   
+  let finalPrompt = "";
+
   if (scene.video_prompt) {
       // If prompt already exists, check if it starts with style. If not, prepend it.
       if (stylePrefix && !scene.video_prompt.startsWith(stylePrefix.trim())) {
-          return `${stylePrefix}${scene.video_prompt}`;
+          finalPrompt = `${stylePrefix}${scene.video_prompt}`;
+      } else {
+          finalPrompt = scene.video_prompt;
       }
-      return scene.video_prompt;
+  } else {
+      finalPrompt = [
+        `Cinematic Shot: ${scene.visual_desc}`,
+        scene.video_camera ? `Camera Movement: ${scene.video_camera}` : "",
+        scene.video_vfx ? `VFX: ${scene.video_vfx}` : "",
+      ].filter(Boolean).join('. ');
+      
+      if (stylePrefix) {
+          finalPrompt = `${stylePrefix}${finalPrompt}`;
+      }
   }
 
-  const corePrompt = [
-    `Cinematic Shot: ${scene.visual_desc}`,
-    scene.video_camera ? `Camera Movement: ${scene.video_camera}` : "",
-    scene.video_vfx ? `VFX: ${scene.video_vfx}` : "",
-    scene.audio_bgm ? `Atmosphere: ${scene.audio_bgm}` : "",
-    scene.audio_dialogue ? `Character Dialogue: ${scene.audio_dialogue?.map(d => d.text).join(' ') || ''}` : ""
-  ].filter(Boolean).join('. ');
+  // Append Dialogue, SFX, BGM (User Request)
+  const audioPrompts: string[] = [];
+  
+  if (scene.audio_dialogue && scene.audio_dialogue.length > 0) {
+      const dialogueText = scene.audio_dialogue.map(d => {
+          return d.speaker ? `${d.speaker}: ${d.text}` : d.text;
+      }).join(' ');
+      audioPrompts.push(`Character Dialogue: ${dialogueText}`);
+  }
 
-  return `${stylePrefix}${corePrompt}`;
+  if (scene.audio_sfx) {
+      audioPrompts.push(`Sound Effect: ${scene.audio_sfx}`);
+  }
+
+  if (scene.audio_bgm) {
+      audioPrompts.push(`Background Music: ${scene.audio_bgm}`);
+  }
+
+  if (audioPrompts.length > 0) {
+     const separator = /[.!?]$/.test(finalPrompt.trim()) ? " " : ". ";
+     finalPrompt = `${finalPrompt}${separator}${audioPrompts.join('. ')}`;
+  }
+
+  return finalPrompt;
 };
 
 export const generateVideo = async (
@@ -575,6 +603,7 @@ export const generateAssetImage = async (
 ): Promise<{ imageUrl: string, prompt: string }> => {
     // 1. Force Style Consistency
     const workStyle = style.work.custom || (style.work.selected !== 'None' ? style.work.selected : '');
+    const useOriginalCharacters = style.work.useOriginalCharacters || false;
     const textureStyle = style.texture.custom || (style.texture.selected !== 'None' ? style.texture.selected : 'Realistic');
     const visualDna = style.visualTags || "";
     
@@ -594,7 +623,24 @@ export const generateAssetImage = async (
     
     // Construct the Unified Style Prefix
     let stylePrefix = "";
-    if (isStandardPrefix) {
+
+    // NEW: 1:1 Restoration Mode - Override Global Style Logic
+    if (useOriginalCharacters) {
+        if (!workStyle || !workStyle.trim()) {
+            throw new Error("1:1 Restoration Mode requires a valid Work Name (Reference Work).");
+        }
+        
+        const normalizedWork = workStyle.trim();
+        const hasChinese = /[\u4e00-\u9fa5]/.test(normalizedWork);
+        // Requirement: "Tamako Market" -> "Tamako Market Art Style" (玉子市场 -> 玉子市场美术风格)
+        const suffix = hasChinese ? "美术风格" : " Art Style";
+        
+        if (!normalizedWork.endsWith(suffix.trim())) {
+             stylePrefix = `${normalizedWork}${suffix}`;
+        } else {
+             stylePrefix = normalizedWork;
+        }
+    } else if (isStandardPrefix) {
         stylePrefix = visualDna;
     } else {
         // Fallback: Construct a best-effort prefix if analysis hasn't been run
@@ -618,9 +664,12 @@ export const generateAssetImage = async (
     let negativePrompt = commonNegative;
     let prompt = "";
 
-    const userNotes = (overridePrompt || "").trim();
+    if (overridePrompt) {
+        prompt = overridePrompt;
+    } else {
+        const userNotes = (overridePrompt || "").trim();
 
-    if (asset.type === 'character') {
+        if (asset.type === 'character') {
             const bgConstraint = "simple clean white background, no background elements, studio lighting";
             // Rule: Single character identity, no effects. 
             negativePrompt += ", multiple different characters, crowd, visual effects, glowing aura, magic spells, fire, lightning, particles, accessories floating";
@@ -671,6 +720,7 @@ export const generateAssetImage = async (
             ${userNotes ? `Additional constraints: ${userNotes}` : ""}
             ${refInstruction}
             NO TEXT. Exclude: ${negativePrompt}`;
+    }
     }
 
   const fetchImageAsBase64 = async (url: string): Promise<string | null> => {
@@ -838,8 +888,24 @@ Output **strictly** a valid JSON object. No markdown.
 Example: { "visual_dna": "[Digital Art][Cyberpunk][Neon & Dark][Volumetric Lighting][Octane Render], " }
 `;
 
-const AGENT_A_ASSET_PROMPT = (language: string, existingAssets: Asset[]) => {
+const AGENT_A_ASSET_PROMPT = (language: string, existingAssets: Asset[], workStyle: string = "", useOriginalCharacters: boolean = false) => {
   const existingList = JSON.stringify(existingAssets.map(a => ({ id: a.id, name: a.name })));
+  
+  let originalCharInstruction = "";
+  if (useOriginalCharacters && workStyle) {
+       originalCharInstruction = `
+       6. **ORIGINAL ASSET DETECTION (1:1 RESTORE)**: 
+          - Check if any characters, locations (scenes), or items in the text match those from the reference work: "${workStyle}".
+          - If a match is found:
+            1. Start description with: "影视剧《${workStyle}》${language === 'Chinese' ? '' : ' '}".
+            2. **CRITICAL**: You MUST describe their **signature appearance/costume/design** from the original work.
+            3. End description with: ", 1:1还原, 原影视造型" (or ", 1:1 restore, original film/TV styling" in English).
+          - Example (Character): "影视剧《Conan》人物 Conan, blue blazer, gray shorts, red bowtie... , 1:1还原, 原影视造型".
+          - Example (Location): "影视剧《Harry Potter》场景 Hogwarts Great Hall, floating candles, long tables... , 1:1还原, 原影视造型".
+          - Example (Item): "影视剧《Iron Man》物品 Arc Reactor, glowing blue circle, metallic ring... , 1:1还原, 原影视造型".
+       `;
+   }
+
   return `
 You are **Agent A2: The Casting Director**.
 Goal: List ALL characters/locations found in the text.
@@ -850,6 +916,7 @@ Goal: List ALL characters/locations found in the text.
 3. **MOUNTS/PETS/VEHICLES (CRITICAL):** If a character has a significant mount, pet, or vehicle, create a **SEPARATE** asset for it.
 4. **DESCRIPTION:** **MUST BE IN ${language}**. Describe visuals (appearance, clothes, age).
 5. **OUTPUT:** Return strictly valid JSON.
+${originalCharInstruction}
 **Response Format (JSON):**
 { "assets": [ { "id": "hero_base", "name": "Hero Name", "description": "Visual description...", "type": "character", "parentId": "optional_parent_id" } ] }
 `;
@@ -931,7 +998,8 @@ export const extractAssets = async (
   language: string = 'Chinese',
   existingAssets: Asset[] = [],
   workStyle: string = '',
-  textureStyle: string = ''
+  textureStyle: string = '',
+  useOriginalCharacters: boolean = false
 ): Promise<{ visualDna: string; assets: Asset[] }> => {
     let visualDna = "";
     try {
@@ -954,7 +1022,7 @@ export const extractAssets = async (
             model: 'gemini-3-flash-preview',
             contents: { parts: [{ text: text }] },
             config: {
-                systemInstruction: AGENT_A_ASSET_PROMPT(language, existingAssets),
+                systemInstruction: AGENT_A_ASSET_PROMPT(language, existingAssets, workStyle, useOriginalCharacters),
                 responseMimeType: "application/json",
                 responseSchema: {
                     type: Type.OBJECT,
@@ -1080,7 +1148,7 @@ ${assetMap}
       "video_camera": "Specific movement (e.g., Dolly In, Pan Right, Handheld) in ${language}",
       "video_duration": "3s",
       "video_vfx": "Detailed VFX instructions in ${language}",
-      "np_prompt": "{{asset_id}} detailed action description for video generation in ${language}...",
+      "np_prompt": "(Strictly in ${language}).Example:Standard(35mm), Static Camera. [Lighting details]. [Character Visuals] + [Specific Action]. [Environment]. 4k, highly detailed.",
       "video_prompt": "(Strictly in ${language}).Example:Standard(35mm), Static Camera. [Lighting details]. [Character Visuals] + [Specific Action]. [Environment]. 4k, highly detailed.",
       "audio_dialogue": [{ "speaker": "Hero", "text": "(Tone) Line in ${language}" }],
       "audio_bgm": "Atmosphere and music description in ${language}",
@@ -1207,6 +1275,7 @@ export const analyzeNovelText = async (
     }
 
     const workStyle = style.work.custom || (style.work.selected !== 'None' ? style.work.selected : '');
+    const useOriginalCharacters = style.work.useOriginalCharacters || false;
     const textureStyle = style.texture.custom || (style.texture.selected !== 'None' ? style.texture.selected : '');
     
     // Construct style prefix using Global Visual DNA if available, otherwise fallback to basic style selection
@@ -1233,7 +1302,23 @@ export const analyzeNovelText = async (
         return parts.length > 0 ? `(${parts.join(', ')})` : "";
     };
 
-    if (workStyle || textureStyle) {
+    // NEW: 1:1 Restoration Mode Logic - Strict Style Enforcement
+    if (useOriginalCharacters) {
+         if (!workStyle || !workStyle.trim()) {
+             throw new Error("1:1 Restoration Mode requires a valid Work Name.");
+         }
+
+         const normalizedWork = workStyle.trim();
+         const hasChinese = /[\u4e00-\u9fa5]/.test(normalizedWork);
+         const suffix = hasChinese ? "美术风格" : " Art Style";
+         
+         if (!normalizedWork.endsWith(suffix.trim())) {
+              generatedDna = `${normalizedWork}${suffix}`;
+         } else {
+              generatedDna = normalizedWork;
+         }
+         stylePrefix = generatedDna;
+    } else if (workStyle || textureStyle) {
         if (style.visualTags) {
              stylePrefix = buildPrefix(style.visualTags);
         } else {
@@ -1247,7 +1332,9 @@ export const analyzeNovelText = async (
         const currentDna = style.visualTags || "";
         const isStandard = currentDna.trim().startsWith("[") && currentDna.includes("]");
 
-        if (isStandard && (workStyle || textureStyle)) {
+        if (useOriginalCharacters && generatedDna) {
+             // 1:1 Mode: DNA is already set strictly above. Do not regenerate.
+        } else if (isStandard && (workStyle || textureStyle)) {
              generatedDna = currentDna;
              //console.log("[Gemini] Reusing existing Visual DNA:", generatedDna);
         } else if (workStyle || textureStyle) {
@@ -1306,6 +1393,9 @@ export const analyzeNovelText = async (
                finalVideoPrompt = `${stylePrefix}, ${finalVideoPrompt}`;
           }
       }
+
+      // User Request: np_prompt must be exactly the same as video_prompt
+      finalNpPrompt = finalVideoPrompt;
 
       return { ...scene, np_prompt: finalNpPrompt, video_prompt: finalVideoPrompt };
     });

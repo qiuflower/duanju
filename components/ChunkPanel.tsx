@@ -51,8 +51,9 @@ const ChunkPanel: React.FC<ChunkPanelProps> = ({
   const [scriptError, setScriptError] = useState<string | null>(null);
   const [exportProgress, setExportProgress] = useState<number | null>(null);
 
-  const handleAddChunkAsset = (newAsset: Asset) => {
-      onUpdateChunk(chunk.id, { assets: [...chunk.assets, newAsset] });
+  const handleAddChunkAssets = (newAssets: Asset | Asset[]) => {
+      const assetsToAdd = Array.isArray(newAssets) ? newAssets : [newAssets];
+      onUpdateChunk(chunk.id, { assets: [...chunk.assets, ...assetsToAdd] });
   };
 
   // Auto-Shoot mechanism
@@ -470,9 +471,10 @@ const ChunkPanel: React.FC<ChunkPanelProps> = ({
                                 globalStyle={styleState}
                                 areAssetsReady={areAssetsReady}
                                 assets={chunk.assets}
-                                onAddAsset={handleAddChunkAsset}
+                                onAddAsset={handleAddChunkAssets}
                                 language={language}
                                 flash={flashSceneId === scene.id}
+                                chapterScenes={chunk.scenes}
                              />
                          ))}
                      </div>
