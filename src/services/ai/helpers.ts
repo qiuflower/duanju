@@ -1,0 +1,131 @@
+import { GenerateContentResponse } from "@/shared/types";
+import { modelManager as ai } from "./model-manager";
+
+// --- Lightweight shims to replace @google/genai types/enums ---
+
+export const Type = {
+    OBJECT: "OBJECT",
+    ARRAY: "ARRAY",
+    STRING: "STRING",
+    NUMBER: "NUMBER",
+    INTEGER: "INTEGER",
+    BOOLEAN: "BOOLEAN",
+} as const;
+
+export const Modality = {
+    AUDIO: "AUDIO",
+} as const;
+
+export const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+// Helper to timeout a promise
+export const withTimeout = <T>(promise: Promise<T>, ms: number): Promise<T> => {
+    return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error(`Request timed out after ${ms / 1000}s`)), ms);
+        promise
+            .then(res => { clearTimeout(timer); resolve(res); })
+            .catch(err => { clearTimeout(timer); reject(err); });
+    });
+};
+
+// Known Voices for Gemini TTS
+export const VOICE_OPTIONS = [
+    { id: "Puck", name: "Puck (Male, Low)" },
+    { id: "Charon", name: "Charon (Male, Deep)" },
+    { id: "Kore", name: "Kore (Female, Soft)" },
+    { id: "Fenrir", name: "Fenrir (Male, Intense)" },
+    { id: "Zephyr", name: "Zephyr (Female, Calm)" },
+    { id: "Aoede", name: "Aoede (Female, Elegant)" }
+];
+
+export async function retryWithBackoff<T>(
+    operation: () => Promise<T>,
+    maxRetries: number = 3,
+    initialDelay: number = 2000,
+    timeoutMs: number = 1200000 // Default 20m timeout per attempt
+): Promise<T> {
+    let retries = 0;
+    while (true) {
+        try {
+            return await withTimeout(operation(), timeoutMs);
+        } catch (error: any) {
+            const status = error?.status || error?.code || error?.response?.status;
+            const message = error?.message || JSON.stringify(error);
+            const isRetryable = status === 429 || status === 503 || status === 500 || message.includes("429") || message.includes("quota") || message.includes("timed out");
+
+            if (isRetryable && retries < maxRetries) {
+                const delay = initialDelay * Math.pow(2, retries);
+                console.warn(`Retry ${retries + 1}/${maxRetries} (${delay}ms) - Error: ${message}`);
+                await wait(delay);
+                retries++;
+                continue;
+            }
+            throw error;
+        }
+    }
+}
+
+// Robust JSON Parsing Helper
+export const safeJsonParse = <T>(text: string | undefined, fallback: T): T => {
+    if (!text) return fallback;
+
+    // Pre-clean: strip markdown fences and trailing whitespace
+    let cleaned = text.trim();
+    // Remove ```json ... ``` or ``` ... ``` wrappers (handles whitespace/newlines around backticks)
+    cleaned = cleaned.replace(/^\s*```(?:json)?\s*/i, '').replace(/\s*```\s*$/i, '').trim();
+
+    const tryParse = (str: string): T | undefined => {
+        try { return JSON.parse(str); } catch { return undefined; }
+    };
+
+    // Remove trailing commas before } or ] (common LLM quirk)
+    const fixTrailingCommas = (str: string) => str.replace(/,\s*([}\]])/g, '$1');
+
+    // 1. Try direct parse after markdown cleanup
+    let result = tryParse(cleaned);
+    if (result !== undefined) return result;
+
+    // 2. Try with trailing comma fix
+    result = tryParse(fixTrailingCommas(cleaned));
+    if (result !== undefined) return result;
+
+    // 3. Extract JSON body: find first { or [ and matching last } or ]
+    const firstOpen = cleaned.indexOf('{');
+    const firstArray = cleaned.indexOf('[');
+    let start = -1;
+    let end = -1;
+
+    if (firstOpen !== -1 && (firstArray === -1 || firstOpen < firstArray)) {
+        start = firstOpen;
+        end = cleaned.lastIndexOf('}');
+    } else if (firstArray !== -1) {
+        start = firstArray;
+        end = cleaned.lastIndexOf(']');
+    }
+
+    if (start !== -1 && end !== -1 && end > start) {
+        const extracted = cleaned.substring(start, end + 1);
+        result = tryParse(extracted);
+        if (result !== undefined) return result;
+
+        result = tryParse(fixTrailingCommas(extracted));
+        if (result !== undefined) return result;
+    }
+
+    // 4. Truncation repair: try progressively closing open brackets
+    const base = (start !== -1 && end !== -1 && end > start)
+        ? fixTrailingCommas(cleaned.substring(start, end + 1))
+        : fixTrailingCommas(cleaned);
+
+    const closers = ['', '}', ']}', '"}', '"}]', '"}]}'];
+    for (const closer of closers) {
+        result = tryParse(base + closer);
+        if (result !== undefined) return result;
+    }
+
+    console.warn("JSON Parse Warning. Raw Text:", text?.substring(0, 300));
+    return fallback;
+};
+
+// Re-export ai for other modules
+export { ai };
