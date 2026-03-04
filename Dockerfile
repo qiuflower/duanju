@@ -1,35 +1,34 @@
-# Use official Node.js image
-FROM node:20-slim
-
-# Set working directory
+# ---- Stage 1: Build the frontend ----
+FROM node:20-slim AS builder
 WORKDIR /app
 
-# Copy root package files
+# Copy root package files for devDependencies (Vite, React, etc.)
 COPY package*.json ./
-
-# Install root dependencies
 RUN npm install
 
-# Copy server package files
-COPY server/package*.json ./server/
-
-# Install server dependencies
-RUN cd server && npm install
-
-# Copy the rest of the application code
-# Note: Ensure .env is present in the directory and NOT in .dockerignore
-# if you want environment variables to be baked into the frontend build.
-COPY . .
-
-# Build the frontend
+# Copy source code and config needed for build
+COPY index.html ./
+COPY vite.config.ts tsconfig.json tailwind.config.js postcss.config.js ./
+COPY src/ ./src/
 RUN npm run build
 
-# Environment variables for runtime
+# ---- Stage 2: Production image ----
+FROM node:20-slim
+WORKDIR /app
+
+# Copy server package files and install only production dependencies
+COPY server/package*.json ./server/
+RUN cd server && npm install --omit=dev
+
+# Copy server code
+COPY server/ ./server/
+
+# Copy built frontend from Stage 1
+COPY --from=builder /app/dist ./dist
+
+# Runtime environment
 ENV PORT=8080
 ENV NODE_ENV=production
-
-# Expose the port
 EXPOSE 8080
 
-# Start the server
 CMD ["node", "server/index.js"]

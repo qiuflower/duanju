@@ -1,6 +1,7 @@
 import { Asset, GenerateContentResponse } from "@/shared/types";
 import { PROMPTS } from "@/domain/generation/prompts";
-import { retryWithBackoff, safeJsonParse, Type, ai } from "./helpers";
+import { retryWithBackoff, safeJsonParse, Type, ai } from "../helpers";
+import { MODELS } from "../model-manager";
 
 // --- GENERATION FUNCTIONS ---
 
@@ -18,7 +19,7 @@ export const generateStyleOptions = async (
 
     try {
         const response = await retryWithBackoff<GenerateContentResponse>(() => ai.models.generateContent({
-            model: 'gemini-3-flash-preview',
+            model: MODELS.TEXT_FAST,
             contents: "Generate list.",
             config: {
                 systemInstruction: systemPrompt,
@@ -64,7 +65,7 @@ export const analyzeVisualStyleFromImages = async (
 
     try {
         const response = await retryWithBackoff<GenerateContentResponse>(() => ai.models.generateContent({
-            model: 'gemini-3-flash-preview',
+            model: MODELS.TEXT_FAST,
             contents: { parts },
             config: {
                 systemInstruction: prompt,
@@ -86,27 +87,32 @@ export const extractAssets = async (
     existingAssets: Asset[] = [],
     workStyle: string = '',
     textureStyle: string = '',
-    useOriginalCharacters: boolean = false
+    useOriginalCharacters: boolean = false,
+    skipDna: boolean = false
 ): Promise<{ visualDna: string; assets: Asset[] }> => {
     let visualDna = "";
-    try {
-        const dnaResponse = await retryWithBackoff<GenerateContentResponse>(() => ai.models.generateContent({
-            model: 'gemini-3-flash-preview',
-            contents: { parts: [{ text: "Analyze the visual style based on the provided style and texture references." }] },
-            config: {
-                systemInstruction: PROMPTS.AGENT_A_DNA(workStyle, textureStyle, language),
-                responseMimeType: "application/json",
-                responseSchema: { type: Type.OBJECT, properties: { visual_dna: { type: Type.STRING } } }
-            }
-        }));
-        const dnaJson = safeJsonParse<{ visual_dna: string }>(dnaResponse.text, { visual_dna: "" });
-        visualDna = dnaJson.visual_dna;
-    } catch (e) { console.warn("Agent A1 failed:", e); }
+    if (!skipDna) {
+        try {
+            const dnaResponse = await retryWithBackoff<GenerateContentResponse>(() => ai.models.generateContent({
+                model: MODELS.TEXT_FAST,
+                contents: { parts: [{ text: "Analyze the visual style based on the provided style and texture references." }] },
+                config: {
+                    systemInstruction: PROMPTS.AGENT_A_DNA(workStyle, textureStyle, language),
+                    responseMimeType: "application/json",
+                    responseSchema: { type: Type.OBJECT, properties: { visual_dna: { type: Type.STRING } } }
+                }
+            }));
+            const dnaJson = safeJsonParse<{ visual_dna: string }>(dnaResponse.text, { visual_dna: "" });
+            visualDna = dnaJson.visual_dna;
+        } catch (e) { console.warn("Agent A1 failed:", e); }
+    } else {
+        //console.log("[extractAssets] Skipping A1 (Visual DNA) — visualTags already exists.");
+    }
 
     let assets: Asset[] = [];
     try {
         const assetResponse = await retryWithBackoff<GenerateContentResponse>(() => ai.models.generateContent({
-            model: 'gemini-3-flash-preview',
+            model: MODELS.TEXT_FAST,
             contents: { parts: [{ text: text }] },
             config: {
                 systemInstruction: PROMPTS.AGENT_A_ASSET(language, existingAssets, workStyle, useOriginalCharacters),

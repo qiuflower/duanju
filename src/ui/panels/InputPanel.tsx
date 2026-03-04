@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { AnalysisStatus, Asset, GlobalStyle } from '@/shared/types';
 import { Translation } from '@/services/i18n/translations';
 import { Sparkles, Play, Trash2, FileText, Database, Upload, BookOpen, Palette } from 'lucide-react';
-import AssetLibrary from '@/ui/panels/AssetLibrary';
+import AssetLibrary from '@/ui/panels/asset-library/AssetLibrary';
 import StylePanel from '@/ui/panels/StylePanel';
 
 interface InputPanelProps {

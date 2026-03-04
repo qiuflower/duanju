@@ -1,5 +1,7 @@
 import { Asset, GlobalStyle, GenerateContentResponse } from "@/shared/types";
-import { retryWithBackoff, safeJsonParse, ai } from "./helpers";
+import { retryWithBackoff, safeJsonParse, ai } from "../helpers";
+import { loadAssetBase64 } from "@/services/storage";
+import { MODELS } from "../model-manager";
 
 // --- HELPER: Extract Image (Base64 or URL) from Response ---
 export const extractImageFromResponse = (response: GenerateContentResponse): string => {
@@ -146,7 +148,7 @@ export const generateAssetImage = async (
     if (overridePrompt) {
         prompt = overridePrompt;
     } else {
-        const userNotes = (overridePrompt || "").trim();
+        const userNotes = "";
 
         if (asset.type === 'character') {
             const bgConstraint = "simple clean white background, no background elements, studio lighting";
@@ -208,7 +210,7 @@ export const generateAssetImage = async (
         }
     };
 
-    const ensureAspectRatio16x9 = async (url: string): Promise<string> => {
+    const ensureAspectRatio = async (url: string, targetAr: string = '16:9'): Promise<string> => {
         try {
             if (!url || !url.startsWith("data:image/")) return url;
 
@@ -224,7 +226,8 @@ export const generateAssetImage = async (
             const srcH = img.naturalHeight || img.height || 0;
             if (!srcW || !srcH) return url;
 
-            const targetRatio = 16 / 9;
+            const [arW, arH] = targetAr.split(':').map(Number);
+            const targetRatio = (arW && arH) ? arW / arH : 16 / 9;
             const srcRatio = srcW / srcH;
             if (Math.abs(srcRatio - targetRatio) < 0.01) return url;
 
@@ -294,10 +297,13 @@ export const generateAssetImage = async (
             }
         }
 
+        const ar = style.aspectRatio || '16:9';
+        const isPortrait = ar === '9:16';
+
         const response = await retryWithBackoff<GenerateContentResponse>(() => ai.models.generateContent({
-            model: 'nano-banana-2-2k',
+            model: MODELS.IMAGE_GEN,
             contents: { parts },
-            config: { imageConfig: { aspectRatio: '16:9' } }
+            config: { imageConfig: { aspectRatio: ar } }
         }), 1, 2000, 600000);
 
         if (!response.candidates || response.candidates.length === 0) {
@@ -306,7 +312,7 @@ export const generateAssetImage = async (
 
         const raw = extractImageFromResponse(response);
         const png = await ensurePngDataUrl(raw);
-        return await ensureAspectRatio16x9(png);
+        return await ensureAspectRatio(png, ar);
     };
 
     try {
@@ -349,7 +355,6 @@ export const generateSceneImage = async (
     usedAssets = usedAssets.slice(0, 3);
 
     // Resolve assets
-    const { loadAssetBase64 } = await import("@/services/storage");
     const resolvedUsedAssets = await Promise.all(usedAssets.map(async a => {
         let url = a.refImageUrl;
         if (!url && a.refImageAssetId) {
@@ -396,7 +401,7 @@ export const generateSceneImage = async (
 
     // 5. Call Model
     const response = await retryWithBackoff<GenerateContentResponse>(() => ai.models.generateContent({
-        model: 'nano-banana-2-2k',
+        model: MODELS.IMAGE_GEN,
         contents: { parts: parts },
         config: { imageConfig: { aspectRatio: ar } }
     }), 2, 2000, 600000);

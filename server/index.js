@@ -12,7 +12,35 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 3002;
 
-app.use(cors());
+// CORS: restrict in production, allow all in dev
+if (process.env.NODE_ENV === 'production') {
+  app.use(cors({ origin: false })); // same-origin only
+} else {
+  app.use(cors());
+}
+
+// Simple in-memory rate limiter (no extra dependency)
+const rateLimitMap = new Map();
+const RATE_LIMIT_WINDOW_MS = 60 * 1000; // 1 minute
+const RATE_LIMIT_MAX = 100; // max requests per window per IP
+
+app.use('/api/', (req, res, next) => {
+  const ip = req.ip || req.connection.remoteAddress;
+  const now = Date.now();
+  const record = rateLimitMap.get(ip) || { count: 0, resetAt: now + RATE_LIMIT_WINDOW_MS };
+
+  if (now > record.resetAt) {
+    record.count = 0;
+    record.resetAt = now + RATE_LIMIT_WINDOW_MS;
+  }
+  record.count++;
+  rateLimitMap.set(ip, record);
+
+  if (record.count > RATE_LIMIT_MAX) {
+    return res.status(429).json({ error: 'Too many requests. Please try again later.' });
+  }
+  next();
+});
 
 // Helper to get API key from environment
 const getApiKey = (target) => {

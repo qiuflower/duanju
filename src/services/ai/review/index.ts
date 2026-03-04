@@ -1,7 +1,8 @@
 import { Scene, Asset, GlobalStyle, VisualReviewResult, GenerateContentResponse } from "@/shared/types";
 import { PROMPTS } from "@/domain/generation/prompts";
-import { retryWithBackoff, safeJsonParse, ai } from "./helpers";
-import { constructVideoPrompt } from "./video";
+import { retryWithBackoff, safeJsonParse, ai } from "../helpers";
+import { constructVideoPrompt } from "../media/video";
+import { MODELS } from "../model-manager";
 
 export interface OptimizedVideoResult {
     prompt: string;
@@ -23,7 +24,7 @@ export const reviewVideoPrompt = async (
 
     try {
         const response = await retryWithBackoff<GenerateContentResponse>(() => ai.models.generateContent({
-            model: 'gemini-3-flash-preview',
+            model: MODELS.TEXT_FAST,
             contents: { parts: [{ text: sysPrompt }] },
             config: {
                 responseMimeType: "application/json"
@@ -68,7 +69,7 @@ export const regenerateVideoPromptOptimized = async (
 
     try {
         const response = await retryWithBackoff<GenerateContentResponse>(() => ai.models.generateContent({
-            model: 'gemini-3-flash-preview',
+            model: MODELS.TEXT_FAST,
             contents: { parts: [{ text: sysPrompt }] },
             config: {
                 responseMimeType: "application/json"
@@ -119,11 +120,11 @@ export const regenerateScenePrompt = async (
 
     const stylePrefix = globalStyle?.visualTags ? `${globalStyle.visualTags}. ` : "";
 
-    const sysPrompt = PROMPTS.IMAGE_PROMPT_OPTIMIZER(baseDesc, assetContext, stylePrefix, language);
+    const sysPrompt = PROMPTS.IMAGE_PROMPT_OPTIMIZER(baseDesc, assetContext, stylePrefix, language, globalStyle?.aspectRatio || '16:9');
 
     try {
         const response = await retryWithBackoff<GenerateContentResponse>(() => ai.models.generateContent({
-            model: 'gemini-3-flash-preview',
+            model: MODELS.TEXT_FAST,
             contents: { parts: [{ text: sysPrompt }] },
             config: {
                 responseMimeType: "application/json"
@@ -166,7 +167,7 @@ export const updateVideoPromptDirectly = async (
 
     try {
         const response = await retryWithBackoff<GenerateContentResponse>(() => ai.models.generateContent({
-            model: 'gemini-3-flash-preview',
+            model: MODELS.TEXT_FAST,
             contents: { parts: [{ text: sysPrompt }] },
             config: {
                 responseMimeType: "application/json"

@@ -232,8 +232,8 @@ export const AssetSelector: React.FC<AssetSelectorProps> = ({
                         <button
                             onClick={() => setActiveTab('assets')}
                             className={`flex-1 py-3 text-xs font-bold uppercase tracking-wider transition-colors ${activeTab === 'assets'
-                                    ? 'bg-white/5 text-banana-500 border-b-2 border-banana-500'
-                                    : 'text-gray-500 hover:text-white hover:bg-white/5'
+                                ? 'bg-white/5 text-banana-500 border-b-2 border-banana-500'
+                                : 'text-gray-500 hover:text-white hover:bg-white/5'
                                 }`}
                         >
                             Assets Library
@@ -241,8 +241,8 @@ export const AssetSelector: React.FC<AssetSelectorProps> = ({
                         <button
                             onClick={() => setActiveTab('scenes')}
                             className={`flex-1 py-3 text-xs font-bold uppercase tracking-wider transition-colors ${activeTab === 'scenes'
-                                    ? 'bg-white/5 text-banana-500 border-b-2 border-banana-500'
-                                    : 'text-gray-500 hover:text-white hover:bg-white/5'
+                                ? 'bg-white/5 text-banana-500 border-b-2 border-banana-500'
+                                : 'text-gray-500 hover:text-white hover:bg-white/5'
                                 }`}
                         >
                             Storyboards ({sceneImages.length})
@@ -295,10 +295,10 @@ export const AssetSelector: React.FC<AssetSelectorProps> = ({
                                 }}
                                 disabled={isDisabled}
                                 className={`group relative aspect-square rounded-lg overflow-hidden border transition-all text-left ${isDisabled
-                                        ? 'border-white/10 opacity-30 cursor-not-allowed'
-                                        : isSelected
-                                            ? 'border-banana-500 ring-1 ring-banana-500'
-                                            : 'border-white/5 hover:border-banana-500/50 hover:scale-[1.02]'
+                                    ? 'border-white/10 opacity-30 cursor-not-allowed'
+                                    : isSelected
+                                        ? 'border-banana-500 ring-1 ring-banana-500'
+                                        : 'border-white/5 hover:border-banana-500/50 hover:scale-[1.02]'
                                     }`}
                             >
                                 {asset.refImageUrl || asset.refImageAssetId ? (

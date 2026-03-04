@@ -1,6 +1,6 @@
 import React, { useRef } from 'react';
 import { AnalysisStatus, Scene, Asset, GlobalStyle, NovelChunk } from '@/shared/types';
-import { analyzeNovelText, extractAssets, analyzeNarrative, generateEpisodeScenes } from '@/services/ai';
+import { extractAssets, analyzeNarrative, generateEpisodeScenes } from '@/services/ai';
 import { loadAssetUrl, saveAsset } from '@/services/storage';
 import JSZip from 'jszip';
 
@@ -30,6 +30,7 @@ export function useChunkManager(deps: ChunkManagerDeps) {
 
     const scriptingChunksRef = useRef<Set<string>>(new Set());
     const extractingChunksRef = useRef<Set<string>>(new Set());
+    const isAnalyzingRef = useRef(false);
 
     const updateChunk = (id: string, updates: Partial<NovelChunk>) => {
         setChunks(prev => prev.map(c => c.id === id ? { ...c, ...updates } : c));
@@ -70,8 +71,9 @@ export function useChunkManager(deps: ChunkManagerDeps) {
             const workStyle = globalStyle.work.custom || (globalStyle.work.selected !== 'None' ? globalStyle.work.selected : '');
             const textureStyle = globalStyle.texture.custom || (globalStyle.texture.selected !== 'None' ? globalStyle.texture.selected : '');
             const useOriginalCharacters = globalStyle.work.useOriginalCharacters || false;
+            const skipDna = !!textureStyle;
 
-            const result = await extractAssets(chunk.text, language, globalAssetsRef.current, workStyle, textureStyle, useOriginalCharacters);
+            const result = await extractAssets(chunk.text, language, globalAssetsRef.current, workStyle, textureStyle, useOriginalCharacters, skipDna);
 
             if (result.visualDna) {
                 setGlobalStyle(prev => ({ ...prev, visualTags: result.visualDna }));
@@ -169,6 +171,7 @@ export function useChunkManager(deps: ChunkManagerDeps) {
                 return scenes;
             }
 
+            // Fallback: no episodeData — analyze chunk text as a single episode
             const prevIndex = chunk.index - 1;
             let prevContext = "";
             if (prevIndex >= 0) {
@@ -177,11 +180,17 @@ export function useChunkManager(deps: ChunkManagerDeps) {
                     prevContext = prevChunk.scenes[prevChunk.scenes.length - 1].narration;
                 }
             }
-            const { scenes, visualDna } = await analyzeNovelText(chunk.text, language, globalAssets, globalStyle, prevContext);
-            if (visualDna) {
-                setGlobalStyle(prev => ({ ...prev, visualTags: visualDna }));
+
+            const blueprint = await analyzeNarrative(chunk.text, language, prevContext);
+
+            let allScenes: import('@/shared/types').Scene[] = [];
+            for (const episode of blueprint.episodes) {
+                const scenes = await generateEpisodeScenes(
+                    episode, blueprint.batch_meta, language, globalAssets, globalStyle, chunk.text
+                );
+                allScenes.push(...scenes);
             }
-            return scenes;
+            return allScenes;
         } finally {
             scriptingChunksRef.current.delete(chunk.id);
         }
@@ -281,6 +290,11 @@ export function useChunkManager(deps: ChunkManagerDeps) {
     };
 
     const handleAnalyze = async (manualText: string, episodeCount?: number) => {
+        if (isAnalyzingRef.current) {
+            console.warn('Analysis already in progress, skipping duplicate call.');
+            return;
+        }
+        isAnalyzingRef.current = true;
         setStatus(AnalysisStatus.ANALYZING);
         setAnalysisProgress(language === 'Chinese' ? "准备分析..." : "Initializing...");
 
@@ -318,6 +332,7 @@ export function useChunkManager(deps: ChunkManagerDeps) {
                 fallbackChunking(textToUse);
             })
             .finally(() => {
+                isAnalyzingRef.current = false;
                 setStatus(AnalysisStatus.IDLE);
                 setAnalysisProgress("");
             });

@@ -288,7 +288,7 @@ JSON Schema:
 `,
 
   // --- AGENT 3: ASSET PRODUCER ---
-  AGENT_3_ASSET_PRODUCER: (fullLensLibrary: string, language: string, stylePrefix: string, assetMap: string) => `
+  AGENT_3_ASSET_PRODUCER: (fullLensLibrary: string, language: string, stylePrefix: string, assetMap: string, aspectRatio: string = '16:9') => `
 System Prompt: Agent 3 - 资产制作人 (The Asset Producer)
 1. Role Definition (角色定义)
 你是 “AI 提示词工程师” 与 “短剧资产总管”。
@@ -320,7 +320,7 @@ A. 视频生成 (Veo 3.1 / Sora-class) -> 对应字段 'video_prompt'
 
 B. 图像生成 (Nanobanana Pro / Midjourney) -> 对应字段 'np_prompt'
 - 目标：(用于生成高质量定场图或用于图生视频的底图) 生成极高画质、构图完美的静帧。
-- 核心语法: [Subject] + [Surroundings] + [Composition (Derived from ID)] + [Lighting] + [Texture/Details] + --ar 16:9 --v 6.0 8k resolution, photorealistic, cinematic lighting, unreal engine 5 render, volumetric fog, octane render.
+- 核心语法: [Subject] + [Surroundings] + [Composition (Derived from ID)] + [Lighting] + [Texture/Details] + --ar ${aspectRatio} --v 6.0 8k resolution, photorealistic, cinematic lighting, unreal engine 5 render, volumetric fog, octane render.
 - **禁止使用动态动词** (e.g., 不要用 "奔跑", "移动"。使用 "奔跑姿态", "动态模糊")。强调材质、光影、构图。
 - **输出语言**: 必须严格使用 ${language}。
 
@@ -350,7 +350,7 @@ Input Data:
   {
     "id": "S01",
     "video_prompt": "${stylePrefix} Cinematic macro shot. Extreme close-up of a human eye. The pupil constricts rapidly. Red blood vessels visible. Sweat beads on skin. Lighting: High contrast rim light. 4k resolution, hyper-realistic.",
-    "np_prompt": "${stylePrefix} Extreme close-up of a human eye, pupil constricting, hyper-detailed iris texture, bloodshot, sweat droplets on eyelashes, dramatic rim lighting, cinematic depth of field, 8k, photorealistic, macro photography. --ar 16:9",
+    "np_prompt": "${stylePrefix} Extreme close-up of a human eye, pupil constricting, hyper-detailed iris texture, bloodshot, sweat droplets on eyelashes, dramatic rim lighting, cinematic depth of field, 8k, photorealistic, macro photography. --ar ${aspectRatio}",
     "audio_bgm": "Dark Industrial / Cinematic Orchestral + Tense, Oppressive + Deep Bass Synthesizer",
     "audio_sfx": "High-pitched tinnitus sound (Sine wave) -> Abrupt silence.",
     "audio_dialogue": []
@@ -358,7 +358,7 @@ Input Data:
   {
     "id": "S03",
     "video_prompt": "${stylePrefix} Top-down aerial shot. Camera pulls up (Crane Up) from a figure tied to a fan blade to reveal a massive industrial shaft. Deep depth perception. Industrial lighting contrast (Blue/Orange). Heavy mechanical atmosphere.",
-    "np_prompt": "${stylePrefix} Top-down view of industrial shaft, tiny figure on giant fan blade, vertigo inducing, rusty metal textures, volumetric fog, blue and orange lighting, epic scale, concept art. --ar 16:9",
+    "np_prompt": "${stylePrefix} Top-down view of industrial shaft, tiny figure on giant fan blade, vertigo inducing, rusty metal textures, volumetric fog, blue and orange lighting, epic scale, concept art. --ar ${aspectRatio}",
     "audio_bgm": "Dark Industrial + Building up + Distorted Cello, Ticking Clock",
     "audio_sfx": "Heavy industrial fan hum, Metallic creaking.",
     "audio_dialogue": []
@@ -375,7 +375,7 @@ JSON Schema:
     "video_camera": "Movement from beat...",
     "video_duration": "3s",
     "video_vfx": "Lighting/VFX details...",
-    "np_prompt": "${stylePrefix} + [Subject] + [Surroundings] + [Composition]... (Static, High Detail) + --ar 16:9 --v 6.0", 
+    "np_prompt": "${stylePrefix} + [Subject] + [Surroundings] + [Composition]... (Static, High Detail) + --ar ${aspectRatio} --v 6.0", 
     "video_prompt": "${stylePrefix} + [Subject+Action] + [Environment+Lighting] + [Camera Movement]... (Dynamic, Motion-focused)",
     "audio_bgm": "[Genre] + [Mood] + [Instruments]",
     "audio_sfx": "Detailed SFX list...",
@@ -477,7 +477,7 @@ If the Input Prompt contains non-English text (e.g., Chinese, Japanese), you MUS
     }
     `,
 
-  IMAGE_PROMPT_OPTIMIZER: (baseDesc: string, assetContext: string, stylePrefix: string, language: string) => `
+  IMAGE_PROMPT_OPTIMIZER: (baseDesc: string, assetContext: string, stylePrefix: string, language: string, aspectRatio: string = '16:9') => `
     You are a **Midjourney/Nanobanana Prompt Expert**.
     Goal: Rewrite the image generation prompt to incorporate new assets and ensure high quality.
     
@@ -491,7 +491,7 @@ If the Input Prompt contains non-English text (e.g., Chinese, Japanese), you MUS
     **Instructions:**
     1. Create a high-quality image prompt based on the Base Description and Active Assets.
     2. **Strict Syntax Structure**:
-       \`[Subject] + [Surroundings] + [Composition] + [Lighting] + [Texture/Details] + --ar 16:9 --v 6.0\`
+       \`[Subject] + [Surroundings] + [Composition] + [Lighting] + [Texture/Details] + --ar ${aspectRatio} --v 6.0\`
     3. **Language Requirement**: The content of the prompt (Subject, Surroundings, etc.) MUST be in **${language}**.
     4. **Cheat Codes (MANDATORY)**: You MUST append the following keywords to the [Texture/Details] section (Keep these in English):
        "8k resolution, photorealistic, cinematic lighting, unreal engine 5 render, volumetric fog, octane render"

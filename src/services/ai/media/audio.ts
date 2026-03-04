@@ -1,6 +1,17 @@
-import { retryWithBackoff, ai } from "./helpers";
+import { retryWithBackoff, ai } from "../helpers";
+import { MODELS } from "../model-manager";
 
 // --- AUDIO / TTS HELPERS ---
+
+// Known Voices for Gemini TTS
+export const VOICE_OPTIONS = [
+    { id: "Puck", name: "Puck (Male, Low)" },
+    { id: "Charon", name: "Charon (Male, Deep)" },
+    { id: "Kore", name: "Kore (Female, Soft)" },
+    { id: "Fenrir", name: "Fenrir (Male, Intense)" },
+    { id: "Zephyr", name: "Zephyr (Female, Calm)" },
+    { id: "Aoede", name: "Aoede (Female, Elegant)" }
+];
 
 export function base64ToArrayBuffer(base64: string) {
     const binaryString = atob(base64);
@@ -99,7 +110,7 @@ export const pcmToWav = (pcmData: ArrayBuffer, sampleRate: number = 24000, numCh
 export const generateSpeech = async (text: string, voiceName: string = 'Kore'): Promise<string> => {
     if (!text.trim()) return "";
     const body = {
-        model: "tts-1-hd-1106",
+        model: MODELS.TTS,
         input: text,
         voice: normalizeAudioVoice(voiceName),
         response_format: "pcm",

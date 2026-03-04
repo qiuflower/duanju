@@ -1,8 +1,8 @@
 import React, { useState, useRef } from 'react';
 import { GlobalStyle, StyleSetting } from '@/shared/types';
 import { Translation } from '@/services/i18n/translations';
-import { Dices, Info, RectangleHorizontal, RectangleVertical, Mic, Volume2, Upload, X, Sparkles, Image as ImageIcon } from 'lucide-react';
-import { generateStyleOptions, VOICE_OPTIONS, generateSpeech, pcmToWav, analyzeVisualStyleFromImages } from '@/services/ai';
+import { Info, RectangleHorizontal, RectangleVertical, Mic, Volume2, Upload, X, Sparkles, Image as ImageIcon } from 'lucide-react';
+import { VOICE_OPTIONS, generateSpeech, pcmToWav, analyzeVisualStyleFromImages } from '@/services/ai';
 
 interface StylePanelProps {
     styleState: GlobalStyle;
@@ -12,7 +12,7 @@ interface StylePanelProps {
 }
 
 const StylePanel: React.FC<StylePanelProps> = ({ styleState, onStyleChange, labels, language = "Chinese" }) => {
-    const [loadingType, setLoadingType] = useState<string | null>(null);
+
     const [previewingVoice, setPreviewingVoice] = useState<string | null>(null);
     const audioRef = useRef<HTMLAudioElement | null>(null);
 
@@ -70,33 +70,7 @@ const StylePanel: React.FC<StylePanelProps> = ({ styleState, onStyleChange, labe
         }
     };
 
-    const handleRollDice = async (type: 'director' | 'work' | 'texture') => {
-        setLoadingType(type);
-        const newSeed = Math.floor(1000 + Math.random() * 9000).toString();
 
-        try {
-            const newOptions = await generateStyleOptions(type, newSeed, language);
-            let mergedOptions = newOptions;
-            if (type === 'texture' && newOptions.length < 20) {
-                const defaults = ["Realistic", "2D", "2.5D", "3D", "Ink", "Clay", "Oil Painting", "Paper Cut"];
-                mergedOptions = [...new Set([...defaults, ...newOptions])].slice(0, 20);
-            }
-
-            onStyleChange({
-                ...styleState,
-                [type]: {
-                    ...styleState[type],
-                    seed: newSeed,
-                    options: mergedOptions,
-                    selected: 'None'
-                }
-            });
-        } catch (e) {
-            console.error("Dice error", e);
-        } finally {
-            setLoadingType(null);
-        }
-    };
 
     const updateSetting = (type: 'director' | 'work' | 'texture', field: keyof StyleSetting, value: any) => {
         onStyleChange({
@@ -148,26 +122,13 @@ const StylePanel: React.FC<StylePanelProps> = ({ styleState, onStyleChange, labe
     ) => {
         return (
             <div className="bg-white/5 rounded-lg p-4 border border-white/5 hover:border-banana-500/20 transition-all">
-                <div className="flex items-center justify-between mb-2">
-                    <div className="flex items-center gap-2">
-                        <h3 className="font-bold text-banana-400 text-sm">{title}</h3>
-                        <div className="group relative">
-                            <Info className="w-3 h-3 text-gray-500 cursor-help" />
-                            <div className="absolute left-0 bottom-full mb-2 w-48 bg-black/90 text-gray-300 text-[10px] p-2 rounded hidden group-hover:block z-50 pointer-events-none">
-                                {hint}
-                            </div>
+                <div className="flex items-center gap-2 mb-2">
+                    <h3 className="font-bold text-banana-400 text-sm">{title}</h3>
+                    <div className="group relative">
+                        <Info className="w-3 h-3 text-gray-500 cursor-help" />
+                        <div className="absolute left-0 bottom-full mb-2 w-48 bg-black/90 text-gray-300 text-[10px] p-2 rounded hidden group-hover:block z-50 pointer-events-none">
+                            {hint}
                         </div>
-                    </div>
-                    <div className="flex items-center gap-2">
-                        <span className="text-[10px] font-mono text-gray-500">SEED: {current.seed}</span>
-                        <button
-                            onClick={() => handleRollDice(type)}
-                            disabled={loadingType === type}
-                            className={`p-1.5 rounded-md bg-banana-500/20 text-banana-500 hover:bg-banana-500 hover:text-black transition-colors ${loadingType === type ? 'animate-spin' : ''}`}
-                            title={labels.randomize}
-                        >
-                            <Dices className="w-4 h-4" />
-                        </button>
                     </div>
                 </div>
 

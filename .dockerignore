@@ -1,9 +1,13 @@
 node_modules
 dist
 .git
-.gitignore
+.env
+.env.*
 .env.local
 .DS_Store
 coverage
-
-
+*.md
+.gemini
+.agents
+scripts
+deploy.ps1

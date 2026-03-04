@@ -1,9 +1,18 @@
-import { PoloProvider } from "./polo/provider";
-import { T8StarProvider } from "./t8star/provider";
-import { IAIProvider, AIProviderConfig } from "./core/interfaces";
+import { PoloProvider } from "./providers/polo";
+import { T8StarProvider } from "./providers/t8star";
+import { IAIProvider, AIProviderConfig } from "./providers/interfaces";
 
 export type ModelType = "text" | "image" | "video";
 export type ProviderType = "polo" | "t8star";
+
+/** Centralized model name constants — use these instead of hardcoded strings */
+export const MODELS = {
+  TEXT_FAST: 'gemini-3-flash-preview',
+  TEXT_AGENT: 'gemini-3-flash-preview',
+  IMAGE_GEN: 'nano-banana-2-2k',
+  IMAGE_POLO_OVERRIDE: 'gemini-3-pro-image-preview',
+  TTS: 'tts-1-hd-1106',
+} as const;
 
 export interface ModelConfig {
   textmodel: ProviderType;
@@ -17,6 +26,8 @@ const DEFAULT_CONFIG: ModelConfig = {
   videomodel: "t8star",
 };
 
+const VALID_PROVIDERS: ProviderType[] = ["polo", "t8star"];
+
 class ModelManager {
   private config: ModelConfig;
   private polo: PoloProvider;
@@ -24,15 +35,15 @@ class ModelManager {
 
   constructor() {
     this.config = this.loadConfig();
-    
+
     const poloConfig: AIProviderConfig = {
-        baseUrl: "/api/polo"
+      baseUrl: "/api/polo"
     };
-    
+
     // Use t8star for media as default if not specified otherwise
     const t8starConfig: AIProviderConfig = {
-        baseUrl: "/api/t8star",
-        mediaBaseUrl: "/api/t8star" 
+      baseUrl: "/api/t8star",
+      mediaBaseUrl: "/api/t8star"
     };
 
     this.polo = new PoloProvider(poloConfig);
@@ -44,7 +55,15 @@ class ModelManager {
     const stored = localStorage.getItem("model_config");
     if (!stored) return DEFAULT_CONFIG;
     try {
-      return { ...DEFAULT_CONFIG, ...JSON.parse(stored) };
+      const parsed = JSON.parse(stored);
+      // Validate provider types to prevent injection
+      const validated: ModelConfig = { ...DEFAULT_CONFIG };
+      for (const key of ["textmodel", "imagemodel", "videomodel"] as const) {
+        if (parsed[key] && VALID_PROVIDERS.includes(parsed[key])) {
+          validated[key] = parsed[key];
+        }
+      }
+      return validated;
     } catch {
       return DEFAULT_CONFIG;
     }
@@ -82,12 +101,12 @@ class ModelManager {
     return {
       generateContent: (args: any) => {
         // Detect if this is an image generation request
-        const isImageRequest = args.config?.imageConfig || 
-                               (args.model && (args.model.includes("nano") || args.model.includes("image")));
+        const isImageRequest = args.config?.imageConfig ||
+          (args.model && (args.model.includes("nano") || args.model.includes("image")));
 
         if (isImageRequest && this.config.imagemodel === "polo") {
-             // Override model name for Polo Image Generation
-             args = { ...args, model: "gemini-3-pro-image-preview" };
+          // Override model name for Polo Image Generation
+          args = { ...args, model: MODELS.IMAGE_POLO_OVERRIDE };
         }
 
         const provider = this.getProviderForContent(args);
@@ -103,8 +122,8 @@ class ModelManager {
   public get operations() {
     return {
       getVideosOperation: (args: any) => {
-         const provider = this.getProvider("video");
-         return provider.getVideosOperation(args);
+        const provider = this.getProvider("video");
+        return provider.getVideosOperation(args);
       }
     };
   }
@@ -114,7 +133,7 @@ class ModelManager {
       speech: (body: any) => {
         // Always use t8star for audio as polo doesn't support it in the current interface
         if (this.t8star.speech) {
-            return this.t8star.speech(body);
+          return this.t8star.speech(body);
         }
         throw new Error("Speech generation not supported by T8Star provider");
       }

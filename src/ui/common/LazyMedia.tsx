@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { useAssetUrl } from '@/hooks/useAssetUrl';
+import { useAssetUrl } from '@/features/useAssetUrl';
 import { Image as ImageIcon, Film } from 'lucide-react';
 
 interface LazyMediaProps {

@@ -1,12 +1,9 @@
-import React, { useState } from 'react';
+import React, { useEffect } from 'react';
 import { NovelChunk, Asset, GlobalStyle, Scene } from '@/shared/types';
 import { Translation } from '@/services/i18n/translations';
 import { ChevronDown, ChevronRight, Wand2, FileText, Video, Download, CheckCircle, Loader2, Film, AlertTriangle, AlertCircle, Trash2, X, Save } from 'lucide-react';
-import SceneCard from '@/ui/cards/SceneCard';
-import JSZip from 'jszip';
-import saveAs from 'file-saver';
-import { generateVideo, reviewVideoPrompt, regenerateVideoPromptOptimized } from '@/services/ai';
-import { loadAssetUrl } from '@/services/storage';
+import SceneCard from '@/ui/cards/scene/SceneCard';
+import { useChunkActions } from './useChunkActions';
 
 interface ChunkPanelProps {
     chunk: NovelChunk;
@@ -19,7 +16,7 @@ interface ChunkPanelProps {
     onDuplicateScene: (chunkId: string, sceneId: string) => void;
     onExtract: (chunk: NovelChunk) => Promise<Asset[]>;
     onGenerateScript: (chunk: NovelChunk) => Promise<Scene[]>;
-    onGenerateImage: (scene: Scene, chunkAssets?: Asset[]) => Promise<string>; // Updated signature
+    onGenerateImage: (scene: Scene, chunkAssets?: Asset[]) => Promise<string>;
     language: string;
     isActive: boolean;
     onToggle: () => void;
@@ -29,293 +26,37 @@ interface ChunkPanelProps {
 }
 
 const ChunkPanel: React.FC<ChunkPanelProps> = ({
-    chunk,
-    globalAssets,
-    styleState,
-    labels,
-    onUpdateChunk,
-    onDeleteChunk,
-    onSceneUpdate,
-    onDuplicateScene,
-    onExtract,
-    onGenerateScript,
-    onGenerateImage,
-    language,
-    isActive,
-    onToggle,
-    autoShoot = false,
-    isLocked = false,
-    flashSceneId
+    chunk, globalAssets, styleState, labels,
+    onUpdateChunk, onDeleteChunk, onSceneUpdate, onDuplicateScene,
+    onExtract, onGenerateScript, onGenerateImage,
+    language, isActive, onToggle,
+    autoShoot = false, isLocked = false, flashSceneId
 }) => {
-    const [loadingStep, setLoadingStep] = useState<'none' | 'extracting' | 'scripting' | 'filming'>('none');
-    const [generatingSceneIds, setGeneratingSceneIds] = useState<string[]>([]);
-    const [scriptError, setScriptError] = useState<string | null>(null);
-    const [exportProgress, setExportProgress] = useState<number | null>(null);
-    const [showTextModal, setShowTextModal] = useState(false);
-    const [editingText, setEditingText] = useState('');
-
-    const handleAddChunkAssets = (newAssets: Asset | Asset[]) => {
-        const assetsToAdd = Array.isArray(newAssets) ? newAssets : [newAssets];
-        onUpdateChunk(chunk.id, { assets: [...chunk.assets, ...assetsToAdd] });
-    };
+    const {
+        loadingStep, scriptError, exportProgress,
+        generatingSceneIds, areAssetsReady,
+        showTextModal, setShowTextModal, editingText, setEditingText,
+        handleAddChunkAssets, handleExtract, handleScript,
+        handleDeleteScene, handleDuplicateScene,
+        handleShoot, handleMakeFilm,
+        handleSceneUpdateWrapper, handleImageGenerated,
+        handleGenerateImageInternal, handleVideoGenerated,
+        handleDownload,
+    } = useChunkActions({
+        chunk, styleState, language, isActive,
+        onUpdateChunk, onSceneUpdate, onDuplicateScene,
+        onExtract, onGenerateScript, onGenerateImage, onToggle
+    });
 
     // Auto-Shoot mechanism
-    React.useEffect(() => {
+    useEffect(() => {
         if (autoShoot) {
-            // Debounce slightly to ensure rendering
             const t = setTimeout(() => {
                 handleShoot();
             }, 500);
             return () => clearTimeout(t);
         }
     }, [autoShoot]);
-
-    // Workflow Check: Are all assets in this chunk ready with ref images?
-    // Only check assets that are actually used/listed in this chunk.
-    const areAssetsReady = chunk.assets.length === 0 || chunk.assets.every(a => !!a.refImageUrl);
-
-    const handleExtract = async () => {
-        setLoadingStep('extracting');
-        setScriptError(null);
-        try {
-            const newAssets = await onExtract(chunk);
-            onUpdateChunk(chunk.id, { status: 'extracted' });
-            if (!isActive) onToggle(); // Open if closed
-        } catch (e: any) {
-            console.error(e);
-            setScriptError(e.message || "Failed to extract assets");
-        } finally {
-            setLoadingStep('none');
-        }
-    };
-
-    const handleScript = async () => {
-        setLoadingStep('scripting');
-        setScriptError(null);
-        try {
-            const scenes = await onGenerateScript(chunk);
-            if (!scenes || scenes.length === 0) throw new Error("Received empty script from AI");
-            onUpdateChunk(chunk.id, { scenes, status: 'scripted' });
-            if (!isActive) onToggle();
-        } catch (e: any) {
-            console.error("Script generation failed", e);
-            setScriptError(e.message || "Failed to generate script. Please try again.");
-        } finally {
-            setLoadingStep('none');
-        }
-    };
-
-    const handleDeleteScene = (sceneId: string) => {
-        const newScenes = chunk.scenes.filter(s => s.id !== sceneId);
-        onUpdateChunk(chunk.id, { scenes: newScenes });
-    };
-
-    const handleDuplicateScene = (sceneId: string) => {
-        onDuplicateScene(chunk.id, sceneId);
-    };
-
-    const handleShoot = async () => {
-        // Guard: Prevent multiple triggers if already shooting
-        if (chunk.status === 'shooting' && generatingSceneIds.length > 0) return;
-
-        onUpdateChunk(chunk.id, { status: 'shooting' });
-
-        const scenesToProcess = chunk.scenes.filter(s => !s.imageUrl);
-        const CONCURRENCY = 10;
-
-        const processScene = async (scene: Scene) => {
-            setGeneratingSceneIds(prev => [...prev, scene.id]);
-            try {
-                const url = await onGenerateImage(scene, chunk.assets);
-                onSceneUpdate(chunk.id, scene.id, { imageUrl: url });
-            } catch (e) {
-                console.error(`Failed to gen image for scene ${scene.id}`, e);
-            } finally {
-                setGeneratingSceneIds(prev => prev.filter(id => id !== scene.id));
-            }
-        };
-
-        try {
-            const executing: Promise<void>[] = [];
-            for (const scene of scenesToProcess) {
-                const p = processScene(scene).then(() => {
-                    const idx = executing.indexOf(p);
-                    if (idx > -1) executing.splice(idx, 1);
-                });
-                executing.push(p);
-
-                if (executing.length >= CONCURRENCY) {
-                    await Promise.race(executing);
-                }
-            }
-            await Promise.all(executing);
-        } catch (e) {
-            console.error("Batch shoot failed", e);
-        }
-    };
-
-    const handleMakeFilm = async () => {
-        setLoadingStep('filming');
-        // Iterate through scenes that have images but no videos
-        const scenesToProcess = chunk.scenes.filter(s => (s.imageUrl || s.imageAssetId) && !s.videoUrl && !s.videoAssetId);
-
-        const MAX_RETRIES = 5;
-        const CONCURRENCY = 3; // Changed from 10 to 1 to avoid 429 RESOURCE_EXHAUSTED
-
-        const processSceneWithRetry = async (scene: Scene) => {
-            let imageToUse = scene.imageUrl;
-            if (!imageToUse && scene.imageAssetId) {
-                // Dynamically load for generation
-                try {
-                    // We need the actual URL/Base64 for generation service
-                    imageToUse = await loadAssetUrl(scene.imageAssetId) || undefined;
-                } catch (e) { console.error("Dynamic load failed", e); }
-            }
-
-            if (!imageToUse) return;
-
-            let lastError;
-            for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-                try {
-                    const videoUrl = await generateVideo(imageToUse, scene, styleState.aspectRatio, (scene.useAssets !== false) ? chunk.assets : []);
-                    onSceneUpdate(chunk.id, scene.id, { videoUrl });
-                    return; // Success
-                } catch (e: any) {
-                    const errorMsg = e?.message || String(e);
-                    console.warn(`Video Gen failed for scene ${scene.id} (Attempt ${attempt}/${MAX_RETRIES})`, errorMsg);
-                    lastError = e;
-
-                    // Check for 429 or Quota Exceeded specifically
-                    const isRateLimit = errorMsg.includes("429") || errorMsg.includes("RESOURCE_EXHAUSTED") || errorMsg.includes("quota");
-
-                    // Backoff delay before retry
-                    // Exponential backoff: 2s, 4s, 8s, 16s, 32s...
-                    // If rate limit, add extra padding
-                    if (attempt < MAX_RETRIES) {
-                        const baseDelay = 2000 * Math.pow(2, attempt - 1);
-                        const actualDelay = isRateLimit ? baseDelay * 2 : baseDelay; // Double delay for rate limits
-                        console.log(`Waiting ${actualDelay}ms before retry for scene ${scene.id}...`);
-                        await new Promise(resolve => setTimeout(resolve, actualDelay));
-                    }
-                }
-            }
-            console.error(`Final failure for scene ${scene.id} after ${MAX_RETRIES} attempts`, lastError);
-        };
-
-        try {
-            // Concurrency Control
-            const executing: Promise<void>[] = [];
-            for (const scene of scenesToProcess) {
-                const p = processSceneWithRetry(scene).then(() => {
-                    const idx = executing.indexOf(p);
-                    if (idx > -1) executing.splice(idx, 1);
-                });
-                executing.push(p);
-
-                if (executing.length >= CONCURRENCY) {
-                    await Promise.race(executing);
-                }
-            }
-            // Wait for remaining
-            await Promise.all(executing);
-        } finally {
-            setLoadingStep('none');
-        }
-    };
-
-    const handleSceneUpdateWrapper = (sceneId: string, field: keyof Scene, value: any) => {
-        onSceneUpdate(chunk.id, sceneId, { [field]: value });
-    };
-
-    const handleImageGenerated = (sceneId: string, url: string) => {
-        // Use the thread-safe updater from App.tsx
-        onSceneUpdate(chunk.id, sceneId, { imageUrl: url });
-    };
-
-    // Pass explicit assets to generator
-    const handleGenerateImageInternal = (scene: Scene) => {
-        return onGenerateImage(scene, chunk.assets);
-    };
-
-    const handleVideoGenerated = (sceneId: string, url: string, assetId?: string) => {
-        onSceneUpdate(chunk.id, sceneId, { videoUrl: url, videoAssetId: assetId });
-    };
-
-    const handleDownload = async () => {
-        setExportProgress(0);
-        try {
-            const zip = new JSZip();
-
-            // 1. Text Metadata
-            const assetText = chunk.assets.map(a => `ID: ${a.id}\nName: ${a.name}\nDesc: ${a.description}\nDNA: ${a.visualDna || ''}`).join('\n---\n');
-            zip.file("assets.txt", assetText);
-
-            // 2. Full JSON Data (Prompts, Scenes)
-            const chunkData = {
-                chunkId: chunk.id,
-                text: chunk.text,
-                assets: chunk.assets,
-                scenes: chunk.scenes
-            };
-            zip.file("data.json", JSON.stringify(chunkData, null, 2));
-
-            // 3. Images Folder
-            const imgFolder = zip.folder("images");
-            const vidFolder = zip.folder("videos");
-            const audioFolder = zip.folder("narration");
-
-            // Helper to get blob from URL or ID
-            const getBlob = async (url?: string, id?: string) => {
-                if (url) {
-                    const res = await fetch(url);
-                    return res.blob();
-                }
-                if (id) {
-                    const tempUrl = await loadAssetUrl(id);
-                    if (tempUrl) {
-                        const res = await fetch(tempUrl);
-                        const b = await res.blob();
-                        URL.revokeObjectURL(tempUrl);
-                        return b;
-                    }
-                }
-                return null;
-            };
-
-            for (const scene of chunk.scenes) {
-                const imgBlob = await getBlob(scene.imageUrl, scene.imageAssetId);
-                if (imgBlob) imgFolder?.file(`${scene.id}.png`, imgBlob);
-
-                const vidBlob = await getBlob(scene.videoUrl, scene.videoAssetId);
-                if (vidBlob) vidFolder?.file(`${scene.id}.mp4`, vidBlob);
-
-                if (scene.narrationAudioUrl) {
-                    const response = await fetch(scene.narrationAudioUrl);
-                    const blob = await response.blob();
-                    audioFolder?.file(`${scene.id}_narration.wav`, blob);
-                }
-            }
-
-            // 4. Asset Reference Images
-            const assetFolder = zip.folder("asset_refs");
-            for (const asset of chunk.assets) {
-                const assetBlob = await getBlob(asset.refImageUrl, asset.refImageAssetId);
-                if (assetBlob) {
-                    assetFolder?.file(`${asset.id}_${asset.name}.png`, assetBlob);
-                }
-            }
-
-            const content = await zip.generateAsync({ type: "blob" }, (metadata) => {
-                setExportProgress(metadata.percent);
-            });
-            saveAs(content, `nano_banana_chapter_${chunk.index + 1}.zip`);
-        } catch (e: any) {
-            console.error("Export failed", e);
-            alert((language === 'Chinese' ? "导出失败: " : "Export Failed: ") + e.message);
-        } finally {
-            setExportProgress(null);
-        }
-    };
 
     return (
         <>
@@ -370,8 +111,8 @@ const ChunkPanel: React.FC<ChunkPanelProps> = ({
                         )}
 
                         <div className={`flex items-center gap-2 px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider ${chunk.status === 'completed' ? 'bg-green-500/20 text-green-400 border border-green-500/30' :
-                                chunk.status === 'shooting' ? 'bg-banana-500/20 text-banana-400 border border-banana-500/30 animate-pulse' :
-                                    'bg-gray-700 text-gray-400'
+                            chunk.status === 'shooting' ? 'bg-banana-500/20 text-banana-400 border border-banana-500/30 animate-pulse' :
+                                'bg-gray-700 text-gray-400'
                             }`}>
                             {chunk.status === 'completed' && <CheckCircle className="w-3 h-3" />}
                             {chunk.status}
@@ -418,8 +159,8 @@ const ChunkPanel: React.FC<ChunkPanelProps> = ({
                             onClick={(e) => { e.stopPropagation(); handleScript(); }}
                             disabled={loadingStep !== 'none' || chunk.status === 'idle' || chunk.status === 'extracting'}
                             className={`px-3 py-1.5 rounded text-xs font-bold flex items-center gap-2 ${loadingStep === 'none' && chunk.status !== 'idle' && chunk.status !== 'extracting'
-                                    ? 'bg-purple-500/20 hover:bg-purple-500/30 text-purple-400'
-                                    : 'bg-gray-700 text-gray-500 cursor-not-allowed'
+                                ? 'bg-purple-500/20 hover:bg-purple-500/30 text-purple-400'
+                                : 'bg-gray-700 text-gray-500 cursor-not-allowed'
                                 }`}
                         >
                             {loadingStep === 'scripting' ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileText className="w-4 h-4" />}
@@ -437,8 +178,8 @@ const ChunkPanel: React.FC<ChunkPanelProps> = ({
                             onClick={(e) => { e.stopPropagation(); handleShoot(); }}
                             disabled={chunk.scenes.length === 0}
                             className={`px-3 py-1.5 rounded text-xs font-bold flex items-center gap-2 shadow-lg ${chunk.scenes.length > 0
-                                    ? 'bg-banana-500 text-black hover:bg-banana-400 shadow-banana-500/20'
-                                    : 'bg-gray-700 text-gray-500 cursor-not-allowed'
+                                ? 'bg-banana-500 text-black hover:bg-banana-400 shadow-banana-500/20'
+                                : 'bg-gray-700 text-gray-500 cursor-not-allowed'
                                 }`}
                         >
                             <Video className="w-4 h-4" />

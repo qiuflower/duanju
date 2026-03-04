@@ -1,0 +1,253 @@
+import { GenerateContentResponse } from "@/shared/types";
+import { PROMPTS } from "@/domain/generation/prompts";
+import { retryWithBackoff, safeJsonParse, wait, Type, ai } from "../helpers";
+import { MODELS } from "../model-manager";
+import { NarrativeBlueprint } from "./types";
+
+// --- AGENT 1: NARRATIVE ARCHITECT ---
+
+export const runAgent1_NarrativeAnalysis = async (
+    text: string,
+    language: string,
+    prevContext: string,
+    episodeCount?: number,
+    onProgress?: (msg: string) => void,
+    onBatchComplete?: (episodes: any[], meta: any) => void
+): Promise<NarrativeBlueprint> => {
+    if (onProgress) {
+        onProgress(`Generating Narrative Blueprint...`);
+    }
+
+    let batches: { start: number, end: number }[] = [{ start: 1, end: -1 }];
+    let isSplitMode = false;
+    const MAX_EPISODES_PER_BATCH = 20;
+
+    if (episodeCount && episodeCount > 0) {
+        if (episodeCount > MAX_EPISODES_PER_BATCH) {
+            isSplitMode = true;
+            batches = [];
+            for (let i = 1; i <= episodeCount; i += MAX_EPISODES_PER_BATCH) {
+                const end = Math.min(i + MAX_EPISODES_PER_BATCH - 1, episodeCount);
+                batches.push({ start: i, end: end });
+            }
+        } else {
+            batches = [{ start: 1, end: episodeCount }];
+        }
+    } else {
+        if (text.length > 20000) {
+            const estimatedCount = Math.min(Math.ceil(text.length / 3000), 60);
+
+            isSplitMode = true;
+            batches = [];
+            for (let i = 1; i <= estimatedCount; i += MAX_EPISODES_PER_BATCH) {
+                const end = Math.min(i + MAX_EPISODES_PER_BATCH - 1, estimatedCount);
+                batches.push({ start: i, end: end });
+            }
+            episodeCount = estimatedCount;
+        }
+    }
+
+    let allEpisodes: any[] = [];
+    let finalBatchMeta: any = { narrative_state: { current_tension: "Low", open_loops: [] } };
+    let currentContext = prevContext;
+
+    for (let i = 0; i < batches.length; i++) {
+        const batch = batches[i];
+        const currentBatchNum = i + 1;
+        const totalBatches = batches.length;
+        const episodeRange = isSplitMode ? `Episodes ${batch.start}-${batch.end}` : "Auto-Distribution";
+
+        if (onProgress) onProgress(isSplitMode ? `Generating Narrative Blueprint (Batch ${currentBatchNum}/${totalBatches})...` : `Generating Narrative Blueprint...`);
+
+        let episodeInstruction = "";
+        if (isSplitMode) {
+            episodeInstruction = `- **强制分集 (Batch ${currentBatchNum}/${totalBatches})**: 
+            本批次任务是生成 **第 ${batch.start} 集 到 第 ${batch.end} 集** (共 ${batch.end - batch.start + 1} 集)。
+            
+            **CRITICAL NARRATIVE SCOPE (叙事范围约束)**:
+            ${i === 0
+                    ? "1. **YOU MUST NOT FINISH THE STORY**. \n2. Cover ONLY the initial setup and inciting incidents for these episodes. \n3. STOP exactly at the designated end episode. \n4. The last episode MUST end on a CLIFFHANGER."
+                    : (i === totalBatches - 1
+                        ? "1. **FINAL STRETCH**: Drive the story to its Conclusion. \n2. Resolve all major conflicts. \n3. Provide a satisfying ending in the final episode."
+                        : "1. **MIDDLE ACT**: Continue the story from the previous batch. \n2. Develop the conflicts and rising action. \n3. Do NOT finish the story yet. \n4. Maintain narrative continuity.")
+                }
+            
+            必须严格按照编号生成，不得跳号，不得重复。确保每一集都有独立的核心冲突。`;
+        } else if (episodeCount && episodeCount > 0) {
+            episodeInstruction = `- **强制分集**: 用户指定了生成 **${episodeCount} 集**。你必须严格将输入内容划分为 ${episodeCount} 集。`;
+        } else {
+            episodeInstruction = "- **智能分集**: 根据输入文本的体量和剧情起伏，将其自动划分为 N 集（每集 3-5 分钟）。";
+        }
+
+        let batchContext = currentContext;
+        if (i > 0 && allEpisodes.length > 0) {
+            const lastEp = allEpisodes[allEpisodes.length - 1];
+            batchContext += `\n\n[Previous Batch Summary]: Ended at Episode ${lastEp.episode_number}. \nLast Cliffhanger: "${lastEp.structure_breakdown?.cliffhanger_last_15s?.narrative_action || "Unknown"}". \n\n**INSTRUCTION**: You MUST start Episode ${lastEp.episode_number + 1} by resolving or escalating this exact cliffhanger. Maintain seamless narrative continuity. Do NOT restart the story.`;
+        }
+
+        const sysPrompt = PROMPTS.AGENT_1_NARRATIVE(
+            episodeInstruction,
+            language,
+            text,
+            batchContext,
+            isSplitMode,
+            episodeRange,
+            currentBatchNum,
+            totalBatches
+        );
+
+        const narrativeSchema = {
+            type: Type.OBJECT,
+            properties: {
+                batch_meta: {
+                    type: Type.OBJECT,
+                    properties: {
+                        narrative_state: {
+                            type: Type.OBJECT,
+                            properties: {
+                                current_tension: { type: Type.STRING },
+                                open_loops: { type: Type.ARRAY, items: { type: Type.STRING } }
+                            }
+                        },
+                        batch_info: {
+                            type: Type.OBJECT,
+                            properties: {
+                                batch_index: { type: Type.NUMBER },
+                                total_batches: { type: Type.NUMBER },
+                                episode_range: { type: Type.STRING },
+                                timestamp: { type: Type.STRING }
+                            }
+                        }
+                    }
+                },
+                episodes: {
+                    type: Type.ARRAY,
+                    items: {
+                        type: Type.OBJECT,
+                        properties: {
+                            episode_number: { type: Type.NUMBER },
+                            title: { type: Type.STRING },
+                            logline: { type: Type.STRING },
+                            structure_breakdown: {
+                                type: Type.OBJECT,
+                                properties: {
+                                    hook_0_15s: {
+                                        type: Type.OBJECT,
+                                        properties: {
+                                            narrative_action: { type: Type.STRING },
+                                            visual_intent: { type: Type.STRING },
+                                            connection_to_prev: { type: Type.STRING }
+                                        }
+                                    },
+                                    incident_15_60s: {
+                                        type: Type.OBJECT,
+                                        properties: {
+                                            narrative_action: { type: Type.STRING },
+                                            pacing: { type: Type.STRING }
+                                        }
+                                    },
+                                    rising_action_60_180s: {
+                                        type: Type.OBJECT,
+                                        properties: {
+                                            key_beats: { type: Type.ARRAY, items: { type: Type.STRING } }
+                                        }
+                                    },
+                                    climax_spectacle_180_240s: {
+                                        type: Type.OBJECT,
+                                        properties: {
+                                            narrative_action: { type: Type.STRING },
+                                            visual_spectacle_requirement: { type: Type.STRING },
+                                            emotional_tone: { type: Type.STRING }
+                                        }
+                                    },
+                                    cliffhanger_last_15s: {
+                                        type: Type.OBJECT,
+                                        properties: {
+                                            narrative_action: { type: Type.STRING },
+                                            question_posed: { type: Type.STRING }
+                                        }
+                                    }
+                                }
+                            },
+                            character_instructions: { type: Type.OBJECT }
+                        },
+                        required: ["episode_number", "title", "structure_breakdown"]
+                    }
+                }
+            },
+            required: ["episodes"]
+        };
+
+        // Per-batch retry: retry this specific batch up to 3 times if it returns no episodes
+        const MAX_BATCH_RETRIES = 3;
+        let batchSuccess = false;
+
+        for (let attempt = 1; attempt <= MAX_BATCH_RETRIES; attempt++) {
+            try {
+                if (attempt > 1 && onProgress) {
+                    onProgress(`Batch ${currentBatchNum}/${totalBatches} retry ${attempt}/${MAX_BATCH_RETRIES}...`);
+                }
+
+                const response = await retryWithBackoff<GenerateContentResponse>(() => ai.models.generateContent({
+                    model: MODELS.TEXT_FAST,
+                    contents: { parts: [{ text: `Analyze the text and generate the blueprint for ${episodeRange}.` }] },
+                    config: {
+                        systemInstruction: sysPrompt,
+                        responseMimeType: "application/json",
+                        responseSchema: narrativeSchema
+                    }
+                }), 3, 5000);
+
+                const result = safeJsonParse<NarrativeBlueprint>(response.text, {
+                    batch_meta: { narrative_state: { current_tension: "Low", open_loops: [] } },
+                    episodes: []
+                });
+
+                if (result.episodes && result.episodes.length > 0) {
+                    if (isSplitMode) {
+                        result.episodes.forEach((ep, idx) => {
+                            const expectedNum = batch.start + idx;
+                            if (ep.episode_number !== expectedNum) {
+                                ep.episode_number = expectedNum;
+                            }
+                        });
+                    }
+
+                    const validEpisodes = result.episodes.filter(ep => {
+                        if (!isSplitMode) return true;
+                        return ep.episode_number >= batch.start && ep.episode_number <= batch.end;
+                    });
+
+                    if (validEpisodes.length > 0) {
+                        allEpisodes.push(...validEpisodes);
+                        finalBatchMeta = result.batch_meta;
+
+                        if (onBatchComplete) {
+                            onBatchComplete(validEpisodes, finalBatchMeta);
+                        }
+                        batchSuccess = true;
+                        break; // Batch succeeded, move to next batch
+                    }
+                }
+
+                // If we reach here, the response had no valid episodes — retry
+                console.warn(`[Agent1] Batch ${currentBatchNum}/${totalBatches} attempt ${attempt} returned no valid episodes.`);
+            } catch (e: any) {
+                console.error(`[Agent1] Batch ${currentBatchNum}/${totalBatches} attempt ${attempt} failed:`, e?.message || e);
+                if (attempt < MAX_BATCH_RETRIES) {
+                    await wait(Math.pow(2, attempt) * 2000); // Exponential backoff between retries
+                }
+            }
+        }
+
+        if (!batchSuccess) {
+            console.error(`[Agent1] Batch ${currentBatchNum}/${totalBatches} (Episodes ${batch.start}-${batch.end}) failed after ${MAX_BATCH_RETRIES} retries. Skipping.`);
+            if (onProgress) onProgress(`Batch ${currentBatchNum}/${totalBatches} failed, continuing...`);
+        }
+    }
+
+    return {
+        batch_meta: finalBatchMeta,
+        episodes: allEpisodes
+    };
+};

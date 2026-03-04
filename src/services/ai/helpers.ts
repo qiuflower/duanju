@@ -28,16 +28,6 @@ export const withTimeout = <T>(promise: Promise<T>, ms: number): Promise<T> => {
     });
 };
 
-// Known Voices for Gemini TTS
-export const VOICE_OPTIONS = [
-    { id: "Puck", name: "Puck (Male, Low)" },
-    { id: "Charon", name: "Charon (Male, Deep)" },
-    { id: "Kore", name: "Kore (Female, Soft)" },
-    { id: "Fenrir", name: "Fenrir (Male, Intense)" },
-    { id: "Zephyr", name: "Zephyr (Female, Calm)" },
-    { id: "Aoede", name: "Aoede (Female, Elegant)" }
-];
-
 export async function retryWithBackoff<T>(
     operation: () => Promise<T>,
     maxRetries: number = 3,
@@ -55,7 +45,7 @@ export async function retryWithBackoff<T>(
 
             if (isRetryable && retries < maxRetries) {
                 const delay = initialDelay * Math.pow(2, retries);
-                console.warn(`Retry ${retries + 1}/${maxRetries} (${delay}ms) - Error: ${message}`);
+
                 await wait(delay);
                 retries++;
                 continue;
@@ -123,7 +113,7 @@ export const safeJsonParse = <T>(text: string | undefined, fallback: T): T => {
         if (result !== undefined) return result;
     }
 
-    console.warn("JSON Parse Warning. Raw Text:", text?.substring(0, 300));
+
     return fallback;
 };
 
