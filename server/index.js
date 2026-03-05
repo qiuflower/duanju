@@ -76,6 +76,8 @@ app.use(
     target: 'https://ai.t8star.cn',
     changeOrigin: true,
     secure: false,
+    timeout: 300000, // 5 minutes
+    proxyTimeout: 300000, // 5 minutes
     pathRewrite: {
       '^/api/t8star': '',
     },
@@ -86,6 +88,9 @@ app.use(
       console.log(`[T8Star Proxy] Authorization header present: ${!!proxyReq.getHeader('Authorization')}`);
     },
     onProxyRes: (proxyRes, req, res) => {
+      // Remove Content-Length to force chunked transfer, preventing ERR_CONTENT_LENGTH_MISMATCH
+      delete proxyRes.headers['content-length'];
+
       if (proxyRes.statusCode >= 400) {
         let body = '';
         proxyRes.on('data', (chunk) => { body += chunk.toString(); });

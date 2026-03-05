@@ -44,12 +44,9 @@ export const analyzeNarrative = async (
     onProgress?: (msg: string) => void,
     onBatchComplete?: (episodes: any[], meta: any) => void
 ): Promise<NarrativeBlueprint> => {
-    return await executeWithRetryAndValidation(
-        () => runAgent1_NarrativeAnalysis(text, language, prevContext, episodeCount, onProgress, onBatchComplete),
-        (res) => res && Array.isArray(res.episodes) && res.episodes.length > 0,
-        "Agent 1 (Narrative Architect)",
-        { textLength: text.length, episodeCount }
-    );
+    // Agent1 already has internal retry logic (batch-level MAX_BATCH_RETRIES=3 + API-level retryWithBackoff),
+    // so no outer executeWithRetryAndValidation wrapper is needed.
+    return await runAgent1_NarrativeAnalysis(text, language, prevContext, episodeCount, onProgress, onBatchComplete);
 };
 
 export const generateEpisodeScenes = async (

@@ -131,6 +131,7 @@ Previous Context:
     ${isBatched ? `\n**Batch Context**: Currently generating ${episodeRange}.` : ""}
     
     Output JSON Schema:
+    **CRITICAL FORMAT RULE**: You MUST output a SINGLE JSON OBJECT (not an array). The top-level structure must be: { "batch_meta": {...}, "episodes": [...] }. Do NOT wrap the output in an array like [{...}] or output episodes as separate array elements.
 {
   "batch_meta": { 
     "narrative_state": { 

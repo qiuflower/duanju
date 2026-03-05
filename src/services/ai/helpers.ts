@@ -102,6 +102,32 @@ export const safeJsonParse = <T>(text: string | undefined, fallback: T): T => {
         if (result !== undefined) return result;
     }
 
+    // 3.5 Bracket-balanced extraction: handles trailing garbage like extra ]}
+    const openChar = (firstOpen !== -1 && (firstArray === -1 || firstOpen < firstArray)) ? '{' : '[';
+    const closeChar = openChar === '{' ? '}' : ']';
+    if (start !== -1) {
+        let depth = 0;
+        let inString = false;
+        let escapeNext = false;
+        let balancedEnd = -1;
+        for (let i = start; i < cleaned.length; i++) {
+            const ch = cleaned[i];
+            if (escapeNext) { escapeNext = false; continue; }
+            if (ch === '\\') { escapeNext = true; continue; }
+            if (ch === '"') { inString = !inString; continue; }
+            if (inString) continue;
+            if (ch === openChar) depth++;
+            else if (ch === closeChar) { depth--; if (depth === 0) { balancedEnd = i; break; } }
+        }
+        if (balancedEnd > start) {
+            const balanced = cleaned.substring(start, balancedEnd + 1);
+            result = tryParse(balanced);
+            if (result !== undefined) return result;
+            result = tryParse(fixTrailingCommas(balanced));
+            if (result !== undefined) return result;
+        }
+    }
+
     // 4. Truncation repair: try progressively closing open brackets
     const base = (start !== -1 && end !== -1 && end > start)
         ? fixTrailingCommas(cleaned.substring(start, end + 1))

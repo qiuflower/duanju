@@ -34,8 +34,8 @@ export const runAgent1_NarrativeAnalysis = async (
             batches = [{ start: 1, end: episodeCount }];
         }
     } else {
-        if (text.length > 20000) {
-            const estimatedCount = Math.min(Math.ceil(text.length / 3000), 60);
+        if (text.length > 100000) {
+            const estimatedCount = Math.min(Math.ceil(text.length / 10000), 60);
 
             isSplitMode = true;
             batches = [];
@@ -198,10 +198,34 @@ export const runAgent1_NarrativeAnalysis = async (
                     }
                 }), 3, 5000);
 
-                const result = safeJsonParse<NarrativeBlueprint>(response.text, {
+                console.log(`[Agent1] Batch ${currentBatchNum}/${totalBatches} raw response:`, response.text);
+
+                let result = safeJsonParse<NarrativeBlueprint>(response.text, {
                     batch_meta: { narrative_state: { current_tension: "Low", open_loops: [] } },
                     episodes: []
                 });
+
+                // AI sometimes returns non-standard array formats — normalize them
+                if (Array.isArray(result) && result.length > 0) {
+                    // Case 1: [{batch_meta, episodes}] — nested format, just unwrap
+                    if (result[0].episodes) {
+                        console.warn(`[Agent1] Response wrapped in array (nested format), unwrapping.`);
+                        result = result[0] as NarrativeBlueprint;
+                    }
+                    // Case 2: [{batch_meta}, {episode}, {episode}, ...] — flat format, reassemble
+                    else if (result.some((item: any) => item.episode_number !== undefined)) {
+                        console.warn(`[Agent1] Response is a flat array, reassembling into NarrativeBlueprint.`);
+                        const metaItem = result.find((item: any) => item.batch_meta) as any;
+                        const episodes = result.filter((item: any) => item.episode_number !== undefined);
+                        result = {
+                            batch_meta: metaItem?.batch_meta || { narrative_state: { current_tension: "Low", open_loops: [] } },
+                            episodes
+                        } as NarrativeBlueprint;
+                    } else {
+                        console.warn(`[Agent1] Response is an unrecognized array format, using first element.`);
+                        result = result[0] as NarrativeBlueprint;
+                    }
+                }
 
                 if (result.episodes && result.episodes.length > 0) {
                     if (isSplitMode) {

@@ -304,7 +304,21 @@ export class T8StarProvider implements IAIProvider {
         messages,
       };
 
-      if (config?.responseMimeType === "application/json" || config?.responseSchema) {
+      if (config?.responseSchema) {
+        // Use Function Calling for structured output — more reliable than response_format
+        body.tools = [{
+          type: "function",
+          function: {
+            name: "submit_structured_output",
+            description: "Submit the structured output data",
+            parameters: config.responseSchema
+          }
+        }];
+        body.tool_choice = {
+          type: "function",
+          function: { name: "submit_structured_output" }
+        };
+      } else if (config?.responseMimeType === "application/json") {
         body.response_format = { type: "json_object" };
       }
 
@@ -337,6 +351,12 @@ export class T8StarProvider implements IAIProvider {
       }
 
       const msg = data?.choices?.[0]?.message;
+
+      // Function Calling: extract structured data from tool_calls
+      if (msg?.tool_calls?.[0]?.function?.arguments) {
+        const text = msg.tool_calls[0].function.arguments;
+        return { text, candidates: [{ content: { parts: [{ text }] } }] };
+      }
 
       const inline = this.extractInlineB64(msg?.content);
       if (inline) {

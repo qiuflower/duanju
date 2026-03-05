@@ -101,7 +101,25 @@ export const runAgent3_AssetProduction = async (
                 }));
 
                 const parsed = safeJsonParse<any>(response.text, { scenes: [] });
-                const batchScenes: Scene[] = Array.isArray(parsed) ? parsed : (parsed.scenes || []);
+
+                // AI sometimes returns non-standard array formats — normalize
+                let batchScenes: Scene[];
+                if (Array.isArray(parsed) && parsed.length > 0) {
+                    if (parsed[0].scenes) {
+                        // Case 1: [{scenes: [...]}] — nested format
+                        console.warn(`[Agent3] Response wrapped in array (nested format), unwrapping.`);
+                        batchScenes = parsed[0].scenes;
+                    } else if (parsed.some((item: any) => item.id !== undefined && item.np_prompt !== undefined)) {
+                        // Case 2: [{meta}, {scene1}, {scene2}, ...] — flat format, filter to scenes only
+                        console.warn(`[Agent3] Response is a flat array, filtering to scene objects only.`);
+                        batchScenes = parsed.filter((item: any) => item.id !== undefined && item.np_prompt !== undefined);
+                    } else {
+                        console.warn(`[Agent3] Response is an unrecognized array format, using as-is.`);
+                        batchScenes = parsed;
+                    }
+                } else {
+                    batchScenes = parsed.scenes || [];
+                }
 
                 if (batchScenes.length === 0) {
                     throw new Error(`Batch returned 0 scenes (expected ${batchBeats.length})`);

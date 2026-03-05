@@ -62,10 +62,25 @@ export const runAgent2_VisualDirection = async (
         }
     }));
 
-    const result = safeJsonParse<MasterBeatSheet>(response.text, {
+    let result = safeJsonParse<MasterBeatSheet>(response.text, {
         visual_strategy: { core_atmosphere: "", key_lens_design: { opening_hook: "", metaphor: "" } },
         beats: []
     });
+
+    // AI sometimes returns non-standard array formats — normalize
+    if (Array.isArray(result) && result.length > 0) {
+        if (result[0].beats) {
+            console.warn(`[Agent2] Response wrapped in array, unwrapping.`);
+            result = result[0] as MasterBeatSheet;
+        } else if (result.some((item: any) => item.beat_id !== undefined)) {
+            console.warn(`[Agent2] Response is a flat array of beats, reassembling.`);
+            const strategyItem = result.find((item: any) => item.visual_strategy) as any;
+            result = {
+                visual_strategy: strategyItem?.visual_strategy || { core_atmosphere: "", key_lens_design: { opening_hook: "", metaphor: "" } },
+                beats: result.filter((item: any) => item.beat_id !== undefined)
+            } as MasterBeatSheet;
+        }
+    }
 
     const beats = (result.beats && Array.isArray(result.beats)) ? result.beats : [];
 
