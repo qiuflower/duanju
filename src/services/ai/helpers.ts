@@ -1,5 +1,4 @@
-import { GenerateContentResponse } from "@/shared/types";
-import { modelManager as ai } from "./model-manager";
+// Frontend helpers — pure utility functions only (AI logic on backend)
 
 // --- Lightweight shims to replace @google/genai types/enums ---
 
@@ -45,7 +44,6 @@ export async function retryWithBackoff<T>(
 
             if (isRetryable && retries < maxRetries) {
                 const delay = initialDelay * Math.pow(2, retries);
-
                 await wait(delay);
                 retries++;
                 continue;
@@ -59,27 +57,21 @@ export async function retryWithBackoff<T>(
 export const safeJsonParse = <T>(text: string | undefined, fallback: T): T => {
     if (!text) return fallback;
 
-    // Pre-clean: strip markdown fences and trailing whitespace
     let cleaned = text.trim();
-    // Remove ```json ... ``` or ``` ... ``` wrappers (handles whitespace/newlines around backticks)
     cleaned = cleaned.replace(/^\s*```(?:json)?\s*/i, '').replace(/\s*```\s*$/i, '').trim();
 
     const tryParse = (str: string): T | undefined => {
         try { return JSON.parse(str); } catch { return undefined; }
     };
 
-    // Remove trailing commas before } or ] (common LLM quirk)
     const fixTrailingCommas = (str: string) => str.replace(/,\s*([}\]])/g, '$1');
 
-    // 1. Try direct parse after markdown cleanup
     let result = tryParse(cleaned);
     if (result !== undefined) return result;
 
-    // 2. Try with trailing comma fix
     result = tryParse(fixTrailingCommas(cleaned));
     if (result !== undefined) return result;
 
-    // 3. Extract JSON body: find first { or [ and matching last } or ]
     const firstOpen = cleaned.indexOf('{');
     const firstArray = cleaned.indexOf('[');
     let start = -1;
@@ -97,12 +89,10 @@ export const safeJsonParse = <T>(text: string | undefined, fallback: T): T => {
         const extracted = cleaned.substring(start, end + 1);
         result = tryParse(extracted);
         if (result !== undefined) return result;
-
         result = tryParse(fixTrailingCommas(extracted));
         if (result !== undefined) return result;
     }
 
-    // 3.5 Bracket-balanced extraction: handles trailing garbage like extra ]}
     const openChar = (firstOpen !== -1 && (firstArray === -1 || firstOpen < firstArray)) ? '{' : '[';
     const closeChar = openChar === '{' ? '}' : ']';
     if (start !== -1) {
@@ -128,7 +118,6 @@ export const safeJsonParse = <T>(text: string | undefined, fallback: T): T => {
         }
     }
 
-    // 4. Truncation repair: try progressively closing open brackets
     const base = (start !== -1 && end !== -1 && end > start)
         ? fixTrailingCommas(cleaned.substring(start, end + 1))
         : fixTrailingCommas(cleaned);
@@ -139,9 +128,5 @@ export const safeJsonParse = <T>(text: string | undefined, fallback: T): T => {
         if (result !== undefined) return result;
     }
 
-
     return fallback;
 };
-
-// Re-export ai for other modules
-export { ai };

@@ -8,8 +8,8 @@
     "build": "vite build",
     "preview": "vite preview",
     "test": "vitest run",
-    "server": "cd server && node index.js",
-    "start": "cd server && node index.js"
+    "server": "cd server && npx tsx watch src/index.ts",
+    "start": "cd server && npx tsx src/index.ts"
   },
   "dependencies": {
     "@google/genai": "^1.33.0",

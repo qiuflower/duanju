@@ -16,6 +16,7 @@ export interface NarrativeBlueprint {
             cliffhanger_last_15s: { narrative_action: string; question_posed: string };
         };
         character_instructions: Record<string, string>;
+        mentioned_chapters?: string[];
     }[];
 }
 
@@ -28,6 +29,10 @@ export interface VisualBeat {
     lighting: string;
     audio_subtext: string;
     asset_ids?: string[];
+    narrative_function?: string;
+    cause_from?: string;
+    effect_to?: string;
+    emotional_intensity?: number;
 }
 
 export interface MasterBeatSheet {

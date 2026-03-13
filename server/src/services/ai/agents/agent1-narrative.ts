@@ -1,5 +1,5 @@
-import { GenerateContentResponse } from "@/shared/types";
-import { PROMPTS } from "@/domain/generation/prompts";
+import { GenerateContentResponse } from "../../../shared/types";
+import { PROMPTS } from "../../../domain/generation/prompts";
 import { retryWithBackoff, safeJsonParse, wait, Type, ai } from "../helpers";
 import { MODELS } from "../model-manager";
 import { NarrativeBlueprint } from "./types";
@@ -178,7 +178,6 @@ export const runAgent1_NarrativeAnalysis = async (
             required: ["episodes"]
         };
 
-        // Per-batch retry: retry this specific batch up to 3 times if it returns no episodes
         const MAX_BATCH_RETRIES = 3;
         let batchSuccess = false;
 
@@ -205,14 +204,11 @@ export const runAgent1_NarrativeAnalysis = async (
                     episodes: []
                 });
 
-                // AI sometimes returns non-standard array formats — normalize them
                 if (Array.isArray(result) && result.length > 0) {
-                    // Case 1: [{batch_meta, episodes}] — nested format, just unwrap
                     if (result[0].episodes) {
                         console.warn(`[Agent1] Response wrapped in array (nested format), unwrapping.`);
                         result = result[0] as NarrativeBlueprint;
                     }
-                    // Case 2: [{batch_meta}, {episode}, {episode}, ...] — flat format, reassemble
                     else if (result.some((item: any) => item.episode_number !== undefined)) {
                         console.warn(`[Agent1] Response is a flat array, reassembling into NarrativeBlueprint.`);
                         const metaItem = result.find((item: any) => item.batch_meta) as any;
@@ -250,16 +246,15 @@ export const runAgent1_NarrativeAnalysis = async (
                             onBatchComplete(validEpisodes, finalBatchMeta);
                         }
                         batchSuccess = true;
-                        break; // Batch succeeded, move to next batch
+                        break;
                     }
                 }
 
-                // If we reach here, the response had no valid episodes — retry
                 console.warn(`[Agent1] Batch ${currentBatchNum}/${totalBatches} attempt ${attempt} returned no valid episodes.`);
             } catch (e: any) {
                 console.error(`[Agent1] Batch ${currentBatchNum}/${totalBatches} attempt ${attempt} failed:`, e?.message || e);
                 if (attempt < MAX_BATCH_RETRIES) {
-                    await wait(Math.pow(2, attempt) * 2000); // Exponential backoff between retries
+                    await wait(Math.pow(2, attempt) * 2000);
                 }
             }
         }

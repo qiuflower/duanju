@@ -1,9 +1,10 @@
-import { Scene, Asset, GenerateContentResponse } from "@/shared/types";
-import { PROMPTS } from "@/domain/generation/prompts";
-import { toDetailedLensLibrary } from "@/domain/generation/core-lenses";
+import { Scene, Asset, GenerateContentResponse } from "../../../shared/types";
+import { PROMPTS } from "../../../domain/generation/prompts";
+import { toDetailedLensLibrary } from "../../../domain/generation/core-lenses";
 import { retryWithBackoff, safeJsonParse, wait, Type, ai } from "../helpers";
 import { MODELS } from "../model-manager";
 import { MasterBeatSheet } from "./types";
+import { ASSET_TAG_REGEX, resolveTagToAsset, injectTagIds, isStoryboardTag } from "../../../shared/asset-tags";
 
 // --- AGENT 3: ASSET PRODUCER ---
 
@@ -15,9 +16,8 @@ export const runAgent3_AssetProduction = async (
     aspectRatio: string = '16:9',
     onProgress?: (msg: string) => void
 ): Promise<Scene[]> => {
-    const assetMap = assets.map(a => `ID: ${a.id}, Name: ${a.name}, DNA: ${a.visualDna || ''}, Desc: ${a.description}`).join('\n');
+    const assetMap = assets.map(a => `@图像_${a.name}#${a.id} → DNA: ${a.visualDna || ''}, Desc: ${a.description}`).join('\n');
 
-    // Use only the lenses that Agent 2 selected (via shot_id in beats)
     const usedShotIds = [...new Set((beatSheet.beats || []).map(b => b.shot_id).filter(Boolean))];
     const filteredLensLibrary = toDetailedLensLibrary(usedShotIds);
 
@@ -26,20 +26,26 @@ export const runAgent3_AssetProduction = async (
     const allBeats = beatSheet.beats || [];
     if (allBeats.length === 0) return [];
 
-    const totalBeats = allBeats.length;
-    const MAX_BEATS_PER_BATCH = 8;
-    const batchCount = Math.max(1, Math.ceil(totalBeats / MAX_BEATS_PER_BATCH));
+    const MIN_TOTAL_BEATS = 25;
+    const MAX_TOTAL_BEATS = 32;
+    const FIXED_BATCH_COUNT = 4;
+    const clampedBeats = allBeats.slice(0, MAX_TOTAL_BEATS);
+    if (clampedBeats.length < MIN_TOTAL_BEATS) {
+        console.warn(`[Agent3] Only ${clampedBeats.length} beats received (min ${MIN_TOTAL_BEATS}). Proceeding with available beats.`);
+    }
+    const totalBeats = clampedBeats.length;
+    const batchCount = FIXED_BATCH_COUNT;
     const batchSize = Math.ceil(totalBeats / batchCount);
 
     let allScenes: Scene[] = [];
+    let prevBatchEndContext = '';
 
     for (let i = 0; i < batchCount; i++) {
         const start = i * batchSize;
         const end = Math.min(start + batchSize, totalBeats);
         if (start >= totalBeats) break;
 
-        const batchBeats = allBeats.slice(start, end);
-
+        const batchBeats = clampedBeats.slice(start, end);
         const beatsStr = JSON.stringify(batchBeats);
 
         const agent3Schema = {
@@ -74,7 +80,7 @@ export const runAgent3_AssetProduction = async (
                             audio_bgm: { type: Type.STRING },
                             assetIds: { type: Type.ARRAY, items: { type: Type.STRING } }
                         },
-                        required: ["id", "narration", "visual_desc", "np_prompt"]
+                        required: ["id", "narration", "visual_desc", "np_prompt", "assetIds"]
                     }
                 }
             },
@@ -84,6 +90,11 @@ export const runAgent3_AssetProduction = async (
         const MAX_BATCH_RETRIES = 2;
         let batchSuccess = false;
 
+        const prevBatchLastBeatId = i > 0 ? clampedBeats[start - 1]?.beat_id : null;
+        const continuityHint = prevBatchEndContext && prevBatchLastBeatId
+            ? `\n⚠️ 衔接锚点: 上一个片段结束镜头为 @图像_分镜${prevBatchLastBeatId}，画面内容: "${prevBatchEndContext}"\n本批次第一个 beat（${batchBeats[0]?.beat_id || 'S??'}）的 video_prompt 0-2秒 必须引用 @图像_分镜${prevBatchLastBeatId} 作为首帧衔接锚点，从该画面自然过渡，禁止跳切。\n\n`
+            : '';
+
         for (let attempt = 1; attempt <= MAX_BATCH_RETRIES; attempt++) {
             try {
                 if (onProgress) {
@@ -92,7 +103,7 @@ export const runAgent3_AssetProduction = async (
 
                 const response = await retryWithBackoff<GenerateContentResponse>(() => ai.models.generateContent({
                     model: MODELS.TEXT_FAST,
-                    contents: { parts: [{ text: `Translate these beats (Batch ${i + 1}/${batchCount}) into Scenes:\n${beatsStr}` }] },
+                    contents: { parts: [{ text: `${continuityHint}Translate these beats (Batch ${i + 1}/${batchCount}) into Scenes:\n${beatsStr}` }] },
                     config: {
                         systemInstruction: sysPrompt,
                         responseMimeType: "application/json",
@@ -102,15 +113,12 @@ export const runAgent3_AssetProduction = async (
 
                 const parsed = safeJsonParse<any>(response.text, { scenes: [] });
 
-                // AI sometimes returns non-standard array formats — normalize
                 let batchScenes: Scene[];
                 if (Array.isArray(parsed) && parsed.length > 0) {
                     if (parsed[0].scenes) {
-                        // Case 1: [{scenes: [...]}] — nested format
                         console.warn(`[Agent3] Response wrapped in array (nested format), unwrapping.`);
                         batchScenes = parsed[0].scenes;
                     } else if (parsed.some((item: any) => item.id !== undefined && item.np_prompt !== undefined)) {
-                        // Case 2: [{meta}, {scene1}, {scene2}, ...] — flat format, filter to scenes only
                         console.warn(`[Agent3] Response is a flat array, filtering to scene objects only.`);
                         batchScenes = parsed.filter((item: any) => item.id !== undefined && item.np_prompt !== undefined);
                     } else {
@@ -128,14 +136,46 @@ export const runAgent3_AssetProduction = async (
                 const validatedScenes = batchScenes.map(scene => {
                     let np = scene.np_prompt || "";
                     if (!np.includes(`--ar ${aspectRatio} --v 6.0`)) {
-                        // Remove any existing --ar tag first
                         np = np.replace(/--ar\s+\S+/g, '').trim();
                         np = `${np} --ar ${aspectRatio} --v 6.0`;
                     }
-                    return { ...scene, np_prompt: np };
+
+                    const allPromptText = `${scene.video_prompt || ''} ${np}`;
+                    const tagMatches = [...allPromptText.matchAll(ASSET_TAG_REGEX)];
+                    const matchedIds = new Set<string>();
+
+                    for (const m of tagMatches) {
+                        const tagName = m[1];
+                        const anchoredId = m[2];
+                        if (isStoryboardTag(tagName)) continue;
+
+                        const resolved = resolveTagToAsset(
+                            { name: tagName, id: anchoredId },
+                            assets
+                        );
+                        if (resolved) matchedIds.add(resolved.id);
+                    }
+
+                    const validAssetIdSet = new Set(assets.map(a => a.id));
+                    for (const id of (scene.assetIds || [])) {
+                        if (validAssetIdSet.has(id)) {
+                            matchedIds.add(id);
+                        }
+                    }
+
+                    const videoPrompt = injectTagIds(scene.video_prompt || '', assets);
+                    const npPrompt = injectTagIds(np, assets);
+
+                    return { ...scene, video_prompt: videoPrompt, np_prompt: npPrompt, assetIds: [...matchedIds] };
                 });
 
                 allScenes.push(...validatedScenes);
+
+                if (validatedScenes.length > 0) {
+                    const lastScene = validatedScenes[validatedScenes.length - 1];
+                    prevBatchEndContext = (lastScene.visual_desc || '') + ' | ' + (lastScene.video_prompt || '').slice(-100);
+                }
+
                 batchSuccess = true;
                 break;
             } catch (batchError: any) {

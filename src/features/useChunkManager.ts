@@ -1,6 +1,6 @@
 import React, { useRef } from 'react';
 import { AnalysisStatus, Scene, Asset, GlobalStyle, NovelChunk } from '@/shared/types';
-import { extractAssets, analyzeNarrative, generateEpisodeScenes } from '@/services/ai';
+import { extractAssets, extractVisualDna, analyzeNarrative, generateEpisodeScenes, generateBeatSheet, generatePromptsFromBeats } from '@/services/ai';
 import { loadAssetUrl, saveAsset } from '@/services/storage';
 import JSZip from 'jszip';
 
@@ -196,6 +196,154 @@ export function useChunkManager(deps: ChunkManagerDeps) {
         }
     };
 
+    // --- Step 1: Generate Beat Sheet + Extract Assets → storyboarded ---
+    const handleGenerateBeats = async (chunk: NovelChunk) => {
+        if (scriptingChunksRef.current.has(chunk.id)) {
+            console.warn(`Beat generation for chunk ${chunk.id} already in progress.`);
+            throw new Error("Generation in progress");
+        }
+        scriptingChunksRef.current.add(chunk.id);
+
+        try {
+            if (chunk.episodeData) {
+                // Auto-generate Visual DNA (A1) if not already present
+                if (!globalStyle.visualTags) {
+                    const workStyle = globalStyle.work.custom || (globalStyle.work.selected !== 'None' ? globalStyle.work.selected : '');
+                    const textureStyle = globalStyle.texture.custom || (globalStyle.texture.selected !== 'None' ? globalStyle.texture.selected : '');
+                    const dna = await extractVisualDna(workStyle, textureStyle, language);
+                    if (dna) {
+                        setGlobalStyle(prev => ({ ...prev, visualTags: dna }));
+                    }
+                }
+
+                const { beatSheet, assets, scenes } = await generateBeatSheet(
+                    chunk.episodeData, chunk.batchMeta, language, globalStyle, globalAssetsRef.current, chunk.text
+                );
+
+                // Merge new assets into global state
+                const currentAssets = globalAssetsRef.current;
+                const newAssets = [...currentAssets];
+                let hasChanges = false;
+                assets.forEach(a => {
+                    if (!newAssets.some(g => g.id === a.id)) {
+                        newAssets.push(a);
+                        hasChanges = true;
+                    }
+                });
+                if (hasChanges) setGlobalAssets(newAssets);
+
+                // Enrich A2 assets with existing ref images from globalAssets
+                const enrichedAssets = assets.map(a => {
+                    const existing = currentAssets.find(g => g.id === a.id);
+                    return existing ? { ...a, refImageUrl: existing.refImageUrl, refImageAssetId: existing.refImageAssetId } : a;
+                });
+
+                updateChunk(chunk.id, {
+                    status: 'storyboarded',
+                    scenes,
+                    beatSheet,
+                    assets: enrichedAssets,
+                });
+                return scenes;
+            }
+            throw new Error("No episodeData available for beat generation");
+        } finally {
+            scriptingChunksRef.current.delete(chunk.id);
+        }
+    };
+
+    // --- Step 2: Generate Prompts from cached BeatSheet → scripted ---
+    const handleGeneratePrompts = async (chunk: NovelChunk) => {
+        if (scriptingChunksRef.current.has(chunk.id)) {
+            console.warn(`Prompt generation for chunk ${chunk.id} already in progress.`);
+            throw new Error("Generation in progress");
+        }
+        scriptingChunksRef.current.add(chunk.id);
+
+        try {
+            if (!chunk.beatSheet) throw new Error("No beat sheet found. Please generate storyboard first.");
+            const epNum = chunk.episodeData?.episode_number || 0;
+
+            // 使用 chunk 级别资产（反映用户在分镜后的增删操作）
+            // 同时保留全局借用资产（场景中引用但不在 chunk 资产列表中的资产）
+            const chunkAssetIds = new Set(chunk.assets.map(a => a.id));
+            const borrowedAssets = globalAssetsRef.current.filter(
+                a => !chunkAssetIds.has(a.id) && chunk.scenes.some(s => s.assetIds?.includes(a.id))
+            );
+            const latestAssets = [...chunk.assets, ...borrowedAssets];
+
+            // 同步 beatSheet：过滤掉用户已删除的分镜（场景ID格式: E{epNum}_{beat_id}）
+            const livingSceneIds = new Set(chunk.scenes.map(s => s.id));
+            const filteredBeats = (chunk.beatSheet.beats || []).filter((beat: any) => {
+                const sceneId = `E${epNum}_${beat.beat_id}`;
+                return livingSceneIds.has(sceneId);
+            });
+
+            // 将用户在 UI 中的手动编辑同步回 beat 数据，让 Agent 3 使用最新内容
+            const sceneMap = new Map(chunk.scenes.map(s => [s.id, s]));
+            const userSyncedBeats = filteredBeats.map((beat: any) => {
+                const scene = sceneMap.get(`E${epNum}_${beat.beat_id}`);
+                if (!scene) return beat;
+                const updated = { ...beat };
+
+                // visual_desc → visual_action (对比原始值，有变化才覆写)
+                const originalDesc = `[${beat.shot_name || beat.shot_id || ''}] ${beat.visual_action || ''}`;
+                if (scene.visual_desc && scene.visual_desc !== originalDesc) {
+                    updated.visual_action = scene.visual_desc;
+                }
+                // video_camera → camera_movement
+                if (scene.video_camera && scene.video_camera !== (beat.camera_movement || '')) {
+                    updated.camera_movement = scene.video_camera;
+                }
+                // video_lens → shot_id
+                if (scene.video_lens && scene.video_lens !== (beat.shot_id || '')) {
+                    updated.shot_id = scene.video_lens;
+                }
+                // audio_sfx → audio_subtext
+                if (scene.audio_sfx && scene.audio_sfx !== (beat.audio_subtext || '')) {
+                    updated.audio_subtext = scene.audio_sfx;
+                }
+                return updated;
+            });
+            const syncedBeatSheet = { ...chunk.beatSheet, beats: userSyncedBeats };
+
+            const { scenes: newScenes, visualDna } = await generatePromptsFromBeats(
+                syncedBeatSheet, epNum, language, latestAssets, globalStyle
+            );
+
+            // 更新全局 Visual DNA
+            if (visualDna) {
+                setGlobalStyle(prev => ({ ...prev, visualTags: visualDna }));
+            }
+
+            // Preserve existing storyboard images/videos by merging media fields from old scenes
+            const oldScenesMap = new Map(chunk.scenes.map(s => [s.id, s]));
+            const mergedScenes = newScenes.map(ns => {
+                const old = oldScenesMap.get(ns.id);
+                if (!old) return ns;
+                return {
+                    ...ns,
+                    // Carry over all media fields from the previous scene
+                    imageUrl: old.imageUrl,
+                    imageAssetId: old.imageAssetId,
+                    videoUrl: old.videoUrl,
+                    videoAssetId: old.videoAssetId,
+                    startEndVideoUrl: old.startEndVideoUrl,
+                    startEndVideoAssetId: old.startEndVideoAssetId,
+                    narrationAudioUrl: old.narrationAudioUrl,
+                    // 保留用户手动覆写的字段（用户填写 > Agent 3 生成）
+                    video_duration: old.video_duration || ns.video_duration,
+                    video_vfx: old.video_vfx || ns.video_vfx,
+                };
+            });
+
+            updateChunk(chunk.id, { scenes: mergedScenes, status: 'scripted' });
+            return mergedScenes;
+        } finally {
+            scriptingChunksRef.current.delete(chunk.id);
+        }
+    };
+
     const handleImportChunk = async (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
         if (!file) return;
@@ -344,6 +492,8 @@ export function useChunkManager(deps: ChunkManagerDeps) {
         handleChunkExtract,
         handleManualExtractAssets,
         handleChunkScript,
+        handleGenerateBeats,
+        handleGeneratePrompts,
         handleImportChunk,
         handleAnalyze,
         extractingChunksRef,

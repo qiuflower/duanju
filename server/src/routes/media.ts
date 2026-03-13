@@ -1,0 +1,97 @@
+import { Router, Request, Response } from 'express';
+import { generateAssetImage, generateSceneImage } from '../services/ai/media/image';
+import { submitVideoGeneration, pollVideoStatus } from '../services/ai/media/video';
+import { generateSpeech } from '../services/ai/media/audio';
+
+const router = Router();
+
+// POST /api/media/asset-image
+router.post('/asset-image', async (req: Request, res: Response) => {
+    try {
+        const { asset, globalStyle, existingAssets } = req.body;
+        if (!asset) {
+            return res.status(400).json({ error: 'Missing required field: asset' });
+        }
+
+        const result = await generateAssetImage(asset, globalStyle, existingAssets || []);
+        res.json(result);
+    } catch (e: any) {
+        console.error('[Media/asset-image]', e);
+        res.status(500).json({ error: e?.message || 'Internal error' });
+    }
+});
+
+// POST /api/media/scene-image
+router.post('/scene-image', async (req: Request, res: Response) => {
+    try {
+        const { scene, globalStyle, assets } = req.body;
+        if (!scene) {
+            return res.status(400).json({ error: 'Missing required field: scene' });
+        }
+
+        const result = await generateSceneImage(scene, globalStyle, assets || []);
+        res.json(result);
+    } catch (e: any) {
+        console.error('[Media/scene-image]', e);
+        res.status(500).json({ error: e?.message || 'Internal error' });
+    }
+});
+
+// POST /api/media/video — Submit task, return immediately
+router.post('/video', async (req: Request, res: Response) => {
+    try {
+        const { imageBase64, scene, aspectRatio, assets, globalStyle, allScenes } = req.body;
+        if (!scene) {
+            return res.status(400).json({ error: 'Missing required field: scene' });
+        }
+
+        const result = await submitVideoGeneration(
+            imageBase64 || '',
+            scene,
+            aspectRatio || '16:9',
+            assets || [],
+            globalStyle,
+            allScenes || []
+        );
+        res.json(result);
+    } catch (e: any) {
+        console.error('[Media/video]', e);
+        res.status(500).json({ error: e?.message || 'Internal error' });
+    }
+});
+
+// POST /api/media/video-status
+router.post('/video-status', async (req: Request, res: Response) => {
+    try {
+        const { operation } = req.body;
+        if (!operation) {
+            return res.status(400).json({ error: 'Missing required field: operation' });
+        }
+
+        // Use pollVideoStatus which normalizes the raw SDK response
+        // into { done, url?, error? } that the frontend expects
+        const result = await pollVideoStatus(operation);
+        res.json(result);
+    } catch (e: any) {
+        console.error('[Media/video-status]', e);
+        res.status(500).json({ error: e?.message || 'Internal error' });
+    }
+});
+
+// POST /api/media/speech
+router.post('/speech', async (req: Request, res: Response) => {
+    try {
+        const { text, voice, scene } = req.body;
+        if (!text && !scene) {
+            return res.status(400).json({ error: 'Missing required field: text or scene' });
+        }
+
+        const result = await generateSpeech(text || scene?.narration || '', voice);
+        res.json(result);
+    } catch (e: any) {
+        console.error('[Media/speech]', e);
+        res.status(500).json({ error: e?.message || 'Internal error' });
+    }
+});
+
+export default router;

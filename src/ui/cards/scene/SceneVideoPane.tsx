@@ -1,7 +1,8 @@
 import React from 'react';
 import { Scene, Asset } from '@/shared/types';
 import { Translation } from '@/services/i18n/translations';
-import { Video, Clock, Camera, Zap, Image as ImageIcon, Link as LinkIcon, Plus, X } from 'lucide-react';
+import { Video, Clock, Camera, Zap, Plus, X, Image as ImageIcon } from 'lucide-react';
+import MentionTextarea from '@/ui/components/MentionTextarea';
 
 interface SceneVideoPaneProps {
     scene: Scene;
@@ -10,13 +11,19 @@ interface SceneVideoPaneProps {
     hasImage: boolean;
     useAssets: boolean;
     setUseAssets: (v: boolean) => void;
-    videoPromptUpdating: boolean;
     assets: Asset[];
     chapterScenes: Scene[];
     onRemoveAsset: (assetId: string, mode: 'image' | 'video') => void;
     onOpenAssetSelector: (mode: 'video') => void;
+    onMentionAsset: (assetId: string) => void;
+    onUnmentionAsset: (assetId: string) => void;
+    sceneImages?: { id: string; name: string; refImageUrl?: string }[];
     onSpecCommit: (field: keyof Scene, value: string) => void;
     onLocalSpecChange: (field: keyof Scene, value: string) => void;
+    isStartEndFrameMode?: boolean;
+    startEndAssetIds?: string[];
+    onOpenEndFrameSelector: () => void;
+    onRemoveEndFrame: () => void;
 }
 
 const SceneVideoPane: React.FC<SceneVideoPaneProps> = ({
@@ -26,14 +33,26 @@ const SceneVideoPane: React.FC<SceneVideoPaneProps> = ({
     hasImage,
     useAssets,
     setUseAssets,
-    videoPromptUpdating,
     assets,
     chapterScenes,
     onRemoveAsset,
     onOpenAssetSelector,
+    onMentionAsset,
+    onUnmentionAsset,
+    sceneImages,
     onSpecCommit,
     onLocalSpecChange,
+    isStartEndFrameMode,
+    startEndAssetIds,
+    onOpenEndFrameSelector,
+    onRemoveEndFrame,
 }) => {
+    // Resolve end frame asset name
+    const endFrameId = startEndAssetIds?.[1];
+    const endFrameAsset = endFrameId ? assets.find(a => a.id === endFrameId) : null;
+    // Also check sceneImages for scene_img_ type IDs
+    const endFrameSceneImg = endFrameId && !endFrameAsset ? sceneImages?.find(s => s.id === endFrameId) : null;
+    const endFrameName = endFrameAsset?.name || endFrameSceneImg?.name || endFrameId;
     return (
         <div className="p-3 flex flex-col gap-2 bg-black/10 h-full">
             <div className="flex justify-between items-center">
@@ -110,163 +129,68 @@ const SceneVideoPane: React.FC<SceneVideoPaneProps> = ({
                 </div>
             </div>
 
-            {/* Reference Image IDs List (Video) */}
-            {hasImage ? (
-                <div className="flex flex-col gap-2 mb-1">
-                    {scene.isStartEndFrameMode ? (
-                        /* --- START/END FRAME MODE UI --- */
-                        <div className="flex flex-col gap-1.5 p-2 bg-banana-500/5 border border-banana-500/20 rounded-lg">
-                            <div className="text-[10px] text-banana-500/70 font-bold uppercase tracking-wider mb-0.5">Start/End Frames</div>
-
-                            {/* 1. Start Frame (Fixed) */}
-                            <div className="flex items-center gap-2">
-                                <span className="text-[10px] font-mono text-gray-500 w-8 text-right">START</span>
-                                <div className="flex items-center gap-1 bg-green-500/10 border border-green-500/20 rounded px-1.5 py-1 text-[10px] text-green-200 flex-1">
-                                    <ImageIcon className="w-3 h-3 opacity-70" />
-                                    <span className="font-medium">Storyboard Image</span>
-                                </div>
-                            </div>
-
-                            {/* 2. End Frame (Optional) */}
-                            <div className="flex items-center gap-2">
-                                <span className="text-[10px] font-mono text-gray-500 w-8 text-right">END</span>
-
-                                {(() => {
-                                    const endFrameId = scene.startEndAssetIds?.[1];
-                                    if (endFrameId) {
-                                        const asset = assets.find(a => a.id === endFrameId);
-                                        return (
-                                            <div className="flex items-center gap-1 bg-blue-500/10 border border-blue-500/20 rounded px-1.5 py-1 text-[10px] text-blue-200 flex-1 animate-fadeIn justify-between group/end">
-                                                <div className="flex items-center gap-1 overflow-hidden">
-                                                    <LinkIcon className="w-3 h-3 opacity-70 flex-shrink-0" />
-                                                    <span className="truncate" title={asset?.name || endFrameId}>{asset?.name || endFrameId}</span>
-                                                </div>
-                                                <button
-                                                    onClick={() => onRemoveAsset(endFrameId, 'video')}
-                                                    className="hover:text-white transition-colors p-0.5 rounded hover:bg-white/10"
-                                                    title="Remove End Frame"
-                                                >
-                                                    <X className="w-3 h-3" />
-                                                </button>
-                                            </div>
-                                        );
-                                    } else {
-                                        return (
-                                            <button
-                                                onClick={() => onOpenAssetSelector('video')}
-                                                className="flex items-center gap-1 bg-white/5 hover:bg-white/10 border border-white/5 hover:border-white/20 rounded px-1.5 py-1 text-[10px] text-gray-400 hover:text-white transition-all flex-1 border-dashed"
-                                                title="Add End Frame Asset"
-                                            >
-                                                <Plus className="w-3 h-3" />
-                                                <span>Add End Frame</span>
-                                            </button>
-                                        );
-                                    }
-                                })()}
-                            </div>
+            {/* Start/End Frame Panel */}
+            {isStartEndFrameMode && (
+                <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 overflow-hidden mb-1">
+                    {/* START row */}
+                    <div className="flex items-center gap-2 px-3 py-2 border-b border-amber-500/10">
+                        <span className="text-[9px] uppercase tracking-widest text-gray-500 font-bold w-10 shrink-0">START</span>
+                        <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-green-500/15 border border-green-500/20">
+                            <ImageIcon className="w-3 h-3 text-green-400" />
+                            <span className="text-[10px] text-green-300 font-medium">Storyboard Image</span>
                         </div>
-                    ) : (
-                        /* --- STANDARD MODE UI --- */
-                        <div className="flex flex-wrap gap-2">
-                            {(() => {
-                                const displayIds = scene.videoAssetIds || [];
-                                return (
-                                    <>
-                                        {displayIds.length === 0 && (
-                                            <span className="text-[10px] text-gray-600 italic py-0.5 self-center">No references</span>
-                                        )}
-                                        {displayIds.map(assetId => {
-                                            if (assetId === `scene_img_${scene.id}`) {
-                                                return (
-                                                    <div key={assetId} className="flex items-center gap-1 bg-green-500/10 border border-green-500/20 rounded px-1.5 py-0.5 text-[10px] text-green-200 animate-fadeIn">
-                                                        <ImageIcon className="w-2.5 h-2.5 opacity-70" />
-                                                        <span className="max-w-[80px] truncate" title="Current Scene">Current Scene</span>
-                                                        <button
-                                                            onClick={() => onRemoveAsset(assetId, 'video')}
-                                                            className="hover:text-white ml-1 transition-colors"
-                                                            title="Remove Reference"
-                                                        >
-                                                            <X className="w-2.5 h-2.5" />
-                                                        </button>
-                                                    </div>
-                                                );
-                                            }
-
-                                            const asset = assets.find(a => a.id === assetId);
-
-                                            if (!asset && assetId.startsWith('scene_img_')) {
-                                                const refId = assetId.replace('scene_img_', '');
-                                                const refScene = chapterScenes.find(s => s.id === refId);
-                                                if (refScene) {
-                                                    return (
-                                                        <div key={assetId} className="flex items-center gap-1 bg-indigo-500/10 border border-indigo-500/20 rounded px-1.5 py-0.5 text-[10px] text-indigo-200 animate-fadeIn">
-                                                            <ImageIcon className="w-2.5 h-2.5 opacity-70" />
-                                                            <span className="max-w-[80px] truncate" title={`Scene ${refId}`}>Scene {refId}</span>
-                                                            <button
-                                                                onClick={() => onRemoveAsset(assetId, 'video')}
-                                                                className="hover:text-white ml-1 transition-colors"
-                                                                title="Remove Reference"
-                                                            >
-                                                                <X className="w-2.5 h-2.5" />
-                                                            </button>
-                                                        </div>
-                                                    );
-                                                }
-                                            }
-
-                                            if (!asset) return null;
-
-                                            return (
-                                                <div key={assetId} className="flex items-center gap-1 bg-blue-500/10 border border-blue-500/20 rounded px-1.5 py-0.5 text-[10px] text-blue-200 animate-fadeIn">
-                                                    <LinkIcon className="w-2.5 h-2.5 opacity-70" />
-                                                    <span className="max-w-[80px] truncate" title={asset?.name || assetId}>{asset?.name || assetId}</span>
-                                                    <button
-                                                        onClick={() => onRemoveAsset(assetId, 'video')}
-                                                        className="hover:text-white ml-1 transition-colors"
-                                                        title="Remove Reference"
-                                                    >
-                                                        <X className="w-2.5 h-2.5" />
-                                                    </button>
-                                                </div>
-                                            );
-                                        })}
-                                        <button
-                                            onClick={() => onOpenAssetSelector('video')}
-                                            className={`flex items-center gap-1 bg-white/5 hover:bg-white/10 border border-white/5 hover:border-white/20 rounded px-1.5 py-0.5 text-[10px] text-gray-400 hover:text-white transition-all ${(displayIds.length >= 3) ? 'opacity-50 cursor-not-allowed' : ''}`}
-                                            title={(displayIds.length >= 3) ? "Max 3 assets for video" : "Add Reference Image"}
-                                            disabled={displayIds.length >= 3}
-                                        >
-                                            <Plus className="w-2.5 h-2.5" />
-                                            <span>Ref</span>
-                                        </button>
-                                    </>
-                                );
-                            })()}
-                        </div>
-                    )}
-                </div>
-            ) : (
-                <div className="text-[10px] text-gray-500 italic mb-1 flex items-center gap-1">
-                    <ImageIcon className="w-3 h-3" />
-                    Generate Storyboard Image first to enable video references.
+                    </div>
+                    {/* END row */}
+                    <div className="flex items-center gap-2 px-3 py-2">
+                        <span className="text-[9px] uppercase tracking-widest text-gray-500 font-bold w-10 shrink-0">END</span>
+                        {endFrameId ? (
+                            <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-blue-500/15 border border-blue-500/20">
+                                <ImageIcon className="w-3 h-3 text-blue-400" />
+                                <span className="text-[10px] text-blue-300 font-medium">{endFrameName}</span>
+                                <button
+                                    onClick={onRemoveEndFrame}
+                                    className="ml-0.5 p-0.5 rounded-full hover:bg-red-500/20 text-gray-500 hover:text-red-400 transition-colors"
+                                    title="Remove End Frame"
+                                >
+                                    <X className="w-3 h-3" />
+                                </button>
+                            </div>
+                        ) : (
+                            <button
+                                onClick={onOpenEndFrameSelector}
+                                className="flex items-center gap-1 px-2 py-0.5 rounded-full border border-dashed border-white/15 text-[10px] text-gray-400 hover:text-banana-400 hover:border-banana-500/30 transition-colors"
+                            >
+                                <Plus className="w-3 h-3" />
+                                Add End Frame
+                            </button>
+                        )}
+                    </div>
                 </div>
             )}
 
-            <textarea
-                value={scene.video_prompt || scene.visual_desc}
-                onChange={(e) => {
+
+
+            <MentionTextarea
+                value={scene.video_prompt || scene.visual_desc || ''}
+                onChange={(val) => {
                     if (scene.video_prompt) {
-                        onUpdate(scene.id, 'video_prompt', e.target.value);
+                        onUpdate(scene.id, 'video_prompt', val);
                     } else {
-                        onUpdate(scene.id, 'visual_desc', e.target.value);
+                        onUpdate(scene.id, 'visual_desc', val);
                     }
                 }}
+                assets={assets}
+                sceneImages={sceneImages}
+                referencedAssetIds={isStartEndFrameMode ? (startEndAssetIds || []) : (scene.videoAssetIds || [])}
+                onMention={onMentionAsset}
+                onUnmention={onUnmentionAsset}
+                maxMentions={isStartEndFrameMode ? undefined : 3}
+                mode="video"
                 className={`flex-1 w-full p-2 rounded border border-white/5 text-xs resize-none outline-none focus:border-blue-500/30 min-h-[10rem] transition-colors ${scene.video_prompt ? 'bg-green-900/10 text-green-100 border-green-500/20' : 'bg-black/20 text-gray-300'
-                    } ${videoPromptUpdating ? 'opacity-50 animate-pulse cursor-wait' : ''}`}
+                    }`}
                 placeholder={labels.visualDesc}
-                disabled={videoPromptUpdating}
             />
-        </div>
+        </div >
     );
 };
 

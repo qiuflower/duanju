@@ -50,7 +50,8 @@ export function useAppState() {
 
     const {
         updateChunk, handleLoadNovel, handleChunkExtract, handleManualExtractAssets,
-        handleChunkScript, handleImportChunk, handleAnalyze, extractingChunksRef
+        handleChunkScript, handleGenerateBeats, handleGeneratePrompts,
+        handleImportChunk, handleAnalyze, extractingChunksRef
     } = useChunkManager({
         chunks, setChunks, globalAssets, setGlobalAssets, globalAssetsRef,
         globalStyle, setGlobalStyle, language, setStatus, setAnalysisProgress,
@@ -94,7 +95,8 @@ export function useAppState() {
     // ── Handlers ────────────────────────────────────
     const handleGenerateImageWrapper = async (scene: Scene, chunkAssets?: Asset[]) => {
         const assetsToUse = chunkAssets || displayedAssets;
-        return await generateSceneImage(scene.np_prompt, "", globalStyle, assetsToUse, scene.assetIds);
+        const result = await generateSceneImage(scene, globalStyle, assetsToUse);
+        return result.imageUrl || result;
     };
 
     const handleUpdateAsset = (updatedAsset: Asset) => {
@@ -160,7 +162,7 @@ export function useAppState() {
 
         // Chunk actions
         updateChunk, handleLoadNovel, handleAnalyze,
-        handleChunkExtract, handleChunkScript, handleImportChunk,
+        handleChunkExtract, handleChunkScript, handleGenerateBeats, handleGeneratePrompts, handleImportChunk,
         handleManualExtractAssets, extractingChunksRef,
 
         // Scene actions

@@ -1,4 +1,4 @@
-import { GenerateContentResponse, VideosOperation } from "@/shared/types";
+import { GenerateContentResponse, VideosOperation } from "../../../shared/types";
 
 export interface GenerateContentArgs {
     model: string;
@@ -18,24 +18,9 @@ export interface GetVideosOperationArgs {
 }
 
 export interface IAIProvider {
-    /**
-     * Generates content (text/image/multimodal) based on the provided arguments.
-     */
     generateContent(args: GenerateContentArgs): Promise<GenerateContentResponse>;
-
-    /**
-     * Generates videos based on the provided arguments.
-     */
     generateVideos(args: GenerateVideosArgs): Promise<VideosOperation>;
-
-    /**
-     * Gets the status/result of a video generation operation.
-     */
     getVideosOperation(args: GetVideosOperationArgs): Promise<VideosOperation>;
-
-    /**
-     * Generates speech (TTS).
-     */
     speech?(body: any): Promise<ArrayBuffer>;
 }
 

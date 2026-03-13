@@ -1,9 +1,33 @@
-import { Asset, GenerateContentResponse } from "@/shared/types";
-import { PROMPTS } from "@/domain/generation/prompts";
+import { Asset, GenerateContentResponse } from "../../../shared/types";
+import { PROMPTS } from "../../../domain/generation/prompts";
 import { retryWithBackoff, safeJsonParse, Type, ai } from "../helpers";
 import { MODELS } from "../model-manager";
 
 // --- GENERATION FUNCTIONS ---
+
+// --- Standalone Visual DNA extraction (Agent A1 only) ---
+export const extractVisualDna = async (
+    workStyle: string = '',
+    textureStyle: string = '',
+    language: string = 'Chinese'
+): Promise<string> => {
+    try {
+        const dnaResponse = await retryWithBackoff<GenerateContentResponse>(() => ai.models.generateContent({
+            model: MODELS.TEXT_FAST,
+            contents: { parts: [{ text: "Analyze the visual style based on the provided style and texture references." }] },
+            config: {
+                systemInstruction: PROMPTS.AGENT_A_DNA(workStyle, textureStyle, language),
+                responseMimeType: "application/json",
+                responseSchema: { type: Type.OBJECT, properties: { visual_dna: { type: Type.STRING } } }
+            }
+        }));
+        const dnaJson = safeJsonParse<{ visual_dna: string }>(dnaResponse.text, { visual_dna: "" });
+        return dnaJson.visual_dna;
+    } catch (e) {
+        console.warn("[extractVisualDna] Agent A1 failed:", e);
+        return "";
+    }
+};
 
 export const generateStyleOptions = async (
     type: 'director' | 'work' | 'texture',
@@ -151,3 +175,65 @@ export const extractAssets = async (
 
     return { visualDna, assets };
 };
+
+// --- Extract assets specifically from a MasterBeatSheet (for two-step pipeline) ---
+export const extractAssetsFromBeats = async (
+    beatSheet: any, // MasterBeatSheet
+    language: string = 'Chinese',
+    existingAssets: Asset[] = [],
+    workStyle: string = '',
+    useOriginalCharacters: boolean = false
+): Promise<Asset[]> => {
+    // Enrich each beat with all visual context (not just visual_action)
+    const beatsText = (beatSheet.beats || [])
+        .map((b: any) => [
+            `[${b.beat_id}]`,
+            `画面: ${b.visual_action || ''}`,
+            b.camera_movement ? `运镜: ${b.camera_movement}` : '',
+            b.lighting ? `灯光: ${b.lighting}` : '',
+            b.audio_subtext ? `音效: ${b.audio_subtext}` : '',
+        ].filter(Boolean).join(' | '))
+        .join('\n');
+
+    if (!beatsText.trim()) return [];
+
+    let assets: Asset[] = [];
+    try {
+        const assetResponse = await retryWithBackoff<GenerateContentResponse>(() => ai.models.generateContent({
+            model: MODELS.TEXT_FAST,
+            contents: { parts: [{ text: beatsText }] },
+            config: {
+                systemInstruction: PROMPTS.AGENT_A2_FROM_BEATS(language, existingAssets, workStyle, useOriginalCharacters),
+                responseMimeType: "application/json",
+                responseSchema: {
+                    type: Type.OBJECT,
+                    properties: {
+                        assets: {
+                            type: Type.ARRAY,
+                            items: {
+                                type: Type.OBJECT,
+                                properties: {
+                                    id: { type: Type.STRING },
+                                    name: { type: Type.STRING },
+                                    description: { type: Type.STRING },
+                                    type: { type: Type.STRING, enum: ['character', 'location', 'prop', 'creature', 'vehicle', 'effect'] },
+                                    parentId: { type: Type.STRING }
+                                },
+                                required: ["id", "name", "description", "type"]
+                            }
+                        }
+                    }
+                },
+            }
+        }));
+        const assetJson = safeJsonParse<any>(assetResponse.text, { assets: [] });
+        if (Array.isArray(assetJson)) {
+            assets = assetJson;
+        } else if (assetJson && Array.isArray(assetJson.assets)) {
+            assets = assetJson.assets;
+        }
+    } catch (e) { console.warn("[extractAssetsFromBeats] Agent A2 failed:", e); }
+
+    return assets;
+};
+

@@ -1,6 +1,6 @@
 import React, { useState, useRef } from 'react';
 import { Scene, ImageGenStatus, GlobalStyle, Asset } from '@/shared/types';
-import { generateSceneImage, generateSpeech, pcmToWav, generateVideo } from '@/services/ai';
+import { generateSceneImage, generateSpeech, pcmToWav, generateVideo, pollVideoUntilDone } from '@/services/ai';
 import { loadAssetUrl } from '@/services/storage';
 
 export interface UseSceneMediaProps {
@@ -11,6 +11,7 @@ export interface UseSceneMediaProps {
     useAssets: boolean;
     areAssetsReady: boolean;
     language: string;
+    chapterScenes?: Scene[];
     onUpdate: (id: string, field: keyof Scene, value: any) => void;
     onGenerateImageOverride?: (scene: Scene) => Promise<string>;
     onImageGenerated?: (id: string, url: string) => void;
@@ -20,7 +21,7 @@ export interface UseSceneMediaProps {
 export function useSceneMedia(props: UseSceneMediaProps) {
     const {
         scene, characterDesc, globalStyle, assets, useAssets,
-        areAssetsReady, language, onUpdate,
+        areAssetsReady, language, chapterScenes, onUpdate,
         onGenerateImageOverride, onImageGenerated, onVideoGenerated
     } = props;
 
@@ -33,10 +34,13 @@ export function useSceneMedia(props: UseSceneMediaProps) {
     const videoRef = useRef<HTMLVideoElement | null>(null);
     const isGeneratingRef = useRef(false);
     const fileInputRef = useRef<HTMLInputElement>(null);
+    const videoFileInputRef = useRef<HTMLInputElement>(null);
     const latestImageRef = useRef<string | null>(scene.imageUrl || null);
 
     const hasImage = !!scene.imageUrl || !!scene.imageAssetId;
-    const hasVideo = !!scene.videoUrl || !!scene.videoAssetId;
+    const hasVideo = scene.isStartEndFrameMode
+        ? (!!scene.startEndVideoUrl || !!scene.startEndVideoAssetId)
+        : (!!scene.videoUrl || !!scene.videoAssetId);
 
     // Reset latestImageRef when scene ID changes
     const lastSceneIdRef = useRef(scene.id);
@@ -83,7 +87,8 @@ export function useSceneMedia(props: UseSceneMediaProps) {
             if (onGenerateImageOverride) {
                 url = await onGenerateImageOverride(scene);
             } else {
-                url = await generateSceneImage(scene.np_prompt, characterDesc, globalStyle, [], scene.assetIds);
+                const result = await generateSceneImage(scene, globalStyle, assets);
+                url = result.imageUrl || result;
             }
             setGenStatus(ImageGenStatus.COMPLETED);
             if (onImageGenerated) {
@@ -97,7 +102,7 @@ export function useSceneMedia(props: UseSceneMediaProps) {
         }
     };
 
-    // ── Generate Video ──
+    // ── Generate Video (async submit + poll) ──
     const handleGenerateVideo = async () => {
         let imageToUse = latestImageRef.current || scene.imageUrl;
         if (!imageToUse && scene.imageAssetId) {
@@ -108,14 +113,20 @@ export function useSceneMedia(props: UseSceneMediaProps) {
                 console.error("Failed to load image for video gen", e);
             }
         }
-        if (!imageToUse) return;
+        // Allow video gen without scene image (reference mode: @图像 tags provide refs)
         setVideoStatus(ImageGenStatus.GENERATING);
         try {
-            const { url, assetId } = await generateVideo(imageToUse, scene, globalStyle.aspectRatio, useAssets ? assets : []);
+            // Step 1: Submit (returns immediately)
+            const { operation } = await generateVideo(imageToUse || '', scene, globalStyle.aspectRatio, useAssets ? assets : [], undefined, chapterScenes);
+            // Step 2: Poll until done
+            const { url } = await pollVideoUntilDone(operation);
+
             setVideoStatus(ImageGenStatus.COMPLETED);
             if (onVideoGenerated) {
-                onVideoGenerated(scene.id, url, assetId);
+                onVideoGenerated(scene.id, url);
             }
+            // Auto-switch to video view
+            setViewMode('video');
         } catch (error) {
             console.error(error);
             setVideoStatus(ImageGenStatus.ERROR);
@@ -208,11 +219,51 @@ export function useSceneMedia(props: UseSceneMediaProps) {
     };
 
     const handleRefresh = () => {
-        if (scene.videoUrl) {
+        if (viewMode === 'video') {
             handleGenerateVideo();
         } else {
             handleGenerateImage(true);
         }
+    };
+
+    // ── Delete Image ──
+    const handleDeleteImage = () => {
+        latestImageRef.current = null;
+        onUpdate(scene.id, 'imageUrl', undefined);
+        onUpdate(scene.id, 'imageAssetId', undefined);
+        setGenStatus(ImageGenStatus.IDLE);
+    };
+
+    // ── Delete Video ──
+    const handleDeleteVideo = () => {
+        if (scene.isStartEndFrameMode) {
+            onUpdate(scene.id, 'startEndVideoUrl', undefined);
+            onUpdate(scene.id, 'startEndVideoAssetId', undefined);
+        } else {
+            onUpdate(scene.id, 'videoUrl', undefined);
+            onUpdate(scene.id, 'videoAssetId', undefined);
+        }
+        setVideoStatus(ImageGenStatus.IDLE);
+    };
+
+    // ── Upload Video ──
+    const handleVideoUploadClick = () => {
+        videoFileInputRef.current?.click();
+    };
+
+    const handleVideoFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+        const file = event.target.files?.[0];
+        if (file) {
+            const url = URL.createObjectURL(file);
+            if (scene.isStartEndFrameMode) {
+                onUpdate(scene.id, 'startEndVideoUrl', url);
+            } else {
+                onUpdate(scene.id, 'videoUrl', url);
+            }
+            setVideoStatus(ImageGenStatus.COMPLETED);
+            setViewMode('video');
+        }
+        event.target.value = '';
     };
 
     // ── Sync prop image/video url with local status ──
@@ -221,9 +272,10 @@ export function useSceneMedia(props: UseSceneMediaProps) {
             latestImageRef.current = scene.imageUrl;
             setGenStatus(ImageGenStatus.COMPLETED);
         }
-        if (scene.videoUrl) {
+        // Check video status based on current mode
+        const activeVideoUrl = scene.isStartEndFrameMode ? scene.startEndVideoUrl : scene.videoUrl;
+        if (activeVideoUrl) {
             setVideoStatus(ImageGenStatus.COMPLETED);
-            setViewMode('video');
         }
         if (scene.narrationAudioUrl) setAudioUrl(scene.narrationAudioUrl);
     };
@@ -240,6 +292,7 @@ export function useSceneMedia(props: UseSceneMediaProps) {
         hasImage,
         hasVideo,
         fileInputRef,
+        videoFileInputRef,
         latestImageRef,
 
         // Handlers
@@ -250,6 +303,10 @@ export function useSceneMedia(props: UseSceneMediaProps) {
         handleUploadClick,
         handleFileChange,
         handleRefresh,
+        handleDeleteImage,
+        handleDeleteVideo,
+        handleVideoUploadClick,
+        handleVideoFileChange,
         saveImage,
         syncMediaStatus,
     };

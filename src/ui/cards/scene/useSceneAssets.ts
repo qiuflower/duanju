@@ -1,6 +1,8 @@
-import { useState, useRef, useMemo } from 'react';
+import { useState, useRef, useMemo, useEffect } from 'react';
 import { Scene, Asset, GlobalStyle } from '@/shared/types';
-import { matchAssetsToPrompt, updateVideoPromptDirectly, regenerateScenePrompt } from '@/services/ai';
+import { matchAssetsToPrompt } from '@/services/ai';
+import { ASSET_TAG_REGEX } from '@/shared/asset-tags';
+import { loadAssetBase64 } from '@/services/storage';
 
 export interface UseSceneAssetsProps {
     scene: Scene;
@@ -15,11 +17,9 @@ export function useSceneAssets(props: UseSceneAssetsProps) {
     const { scene, assets, globalStyle, language, chapterScenes, onUpdate } = props;
 
     const [activeAssetSelector, setActiveAssetSelector] = useState<'none' | 'image' | 'video'>('none');
-    const [promptGenLoading, setPromptGenLoading] = useState(false);
-    const [videoPromptUpdating, setVideoPromptUpdating] = useState(false);
     const [useAssets, setUseAssets] = useState(scene.useAssets ?? true);
 
-    const assetUpdateTimerRef = useRef<NodeJS.Timeout | null>(null);
+
     const lastProcessedImageAssetsRef = useRef<string[]>(scene.assetIds || []);
     const lastProcessedVideoAssetsRef = useRef<string[]>(
         scene.isStartEndFrameMode
@@ -81,88 +81,9 @@ export function useSceneAssets(props: UseSceneAssetsProps) {
         return assetsToUse;
     };
 
-    // ── Video Prompt Update ──
-    const updateVideoPromptWithAssets = async (newAssetIds: string[], overrideAssets?: Asset[]) => {
-        setVideoPromptUpdating(true);
-        lastProcessedVideoAssetsRef.current = [...newAssetIds].sort();
-        try {
-            const tempScene = { ...scene, assetIds: newAssetIds };
-            const assetsToUse = resolveSceneAssets(newAssetIds, overrideAssets);
-            const optimized = await updateVideoPromptDirectly(tempScene, language, assetsToUse, globalStyle);
-            onUpdate(scene.id, 'video_prompt', optimized.prompt);
-            if (optimized.specs.duration) onUpdate(scene.id, 'video_duration', optimized.specs.duration);
-            if (optimized.specs.camera) onUpdate(scene.id, 'video_camera', optimized.specs.camera);
-            if (optimized.specs.lens) onUpdate(scene.id, 'video_lens', optimized.specs.lens);
-            if (optimized.specs.vfx) onUpdate(scene.id, 'video_vfx', optimized.specs.vfx);
-        } catch (e) {
-            console.error("Video prompt update failed", e);
-        } finally {
-            setVideoPromptUpdating(false);
-        }
-    };
-
-    // ── Image Prompt Update ──
-    const updatePromptWithAssets = async (newAssetIds: string[], overrideAssets?: Asset[]) => {
-        setPromptGenLoading(true);
-        lastProcessedImageAssetsRef.current = [...newAssetIds].sort();
-        onUpdate(scene.id, 'assetIds', newAssetIds);
-        try {
-            const tempScene = { ...scene, assetIds: newAssetIds };
-            const assetsToUse = resolveSceneAssets(newAssetIds, overrideAssets);
-            const newPrompt = await regenerateScenePrompt(tempScene, assetsToUse, globalStyle, language);
-            onUpdate(scene.id, 'np_prompt', newPrompt);
-        } catch (e) {
-            console.error("Prompt refresh failed", e);
-        } finally {
-            setPromptGenLoading(false);
-        }
-    };
-
-    // ── Scheduled Asset Update (debounced) ──
-    const scheduleAssetUpdate = (newIds: string[], assetsToUse: Asset[], type: 'video' | 'image') => {
-        if (assetUpdateTimerRef.current) clearTimeout(assetUpdateTimerRef.current);
-        assetUpdateTimerRef.current = setTimeout(() => {
-            const sortedNewIds = [...newIds].sort();
-            const lastIds = type === 'video'
-                ? lastProcessedVideoAssetsRef.current
-                : lastProcessedImageAssetsRef.current;
-            const sortedLastIds = [...lastIds].sort();
-            const isSame = sortedNewIds.length === sortedLastIds.length &&
-                sortedNewIds.every((val, index) => val === sortedLastIds[index]);
-            if (isSame) return;
-            if (type === 'video') {
-                updateVideoPromptWithAssets(newIds, assetsToUse);
-            } else {
-                updatePromptWithAssets(newIds, assetsToUse);
-            }
-        }, 5000);
-    };
-
-    // ── Spec Commit ──
-    const handleSpecCommit = async (field: keyof Scene, value: string) => {
-        const tempScene = { ...scene, [field]: value };
-        const prevSpecs = lastProcessedSpecsRef.current;
-        const isChanged =
-            tempScene.video_duration !== prevSpecs.video_duration ||
-            tempScene.video_camera !== prevSpecs.video_camera ||
-            tempScene.video_lens !== prevSpecs.video_lens ||
-            tempScene.video_vfx !== prevSpecs.video_vfx;
-        if (!isChanged) return;
-        lastProcessedSpecsRef.current = {
-            video_duration: tempScene.video_duration,
-            video_camera: tempScene.video_camera,
-            video_lens: tempScene.video_lens,
-            video_vfx: tempScene.video_vfx
-        };
-        setVideoPromptUpdating(true);
-        try {
-            const optimized = await updateVideoPromptDirectly(tempScene, language, assets, globalStyle);
-            onUpdate(scene.id, 'video_prompt', optimized.prompt);
-        } catch (e) {
-            console.error("Spec update optimization failed", e);
-        } finally {
-            setVideoPromptUpdating(false);
-        }
+    // ── Spec Commit (just save, no AI call) ──
+    const handleSpecCommit = (field: keyof Scene, value: string) => {
+        onUpdate(scene.id, field, value);
     };
 
     const handleLocalSpecChange = (field: keyof Scene, value: string) => {
@@ -170,6 +91,16 @@ export function useSceneAssets(props: UseSceneAssetsProps) {
     };
 
     // ── Asset Add / Remove ──
+    // Helper: append @图像 tag for newly added asset to prompt (with #id anchor)
+    const appendTagToPrompt = (prompt: string, assetId: string, overrideAssets?: Asset[]): string => {
+        const allAssets = overrideAssets ? [...assets, ...overrideAssets] : assets;
+        const asset = allAssets.find(a => a.id === assetId);
+        if (!asset) return prompt;
+        // Allow duplicate tags — dedup happens downstream in video.ts/agent3-asset.ts
+        const tag = `@图像_${asset.name}#${asset.id}`;
+        return prompt ? `${prompt} ${tag}` : tag;
+    };
+
     const handleAddAsset = (assetId: string | string[], newAsset?: Asset | Asset[]) => {
         const assetIdsToAdd = Array.isArray(assetId) ? assetId : [assetId];
         const newAssetsToAdd = newAsset ? (Array.isArray(newAsset) ? newAsset : [newAsset]) : [];
@@ -181,35 +112,54 @@ export function useSceneAssets(props: UseSceneAssetsProps) {
                 const newIds = [currentSceneImgId, targetAssetId];
                 onUpdate(scene.id, 'video_prompt_backup', scene.video_prompt);
                 onUpdate(scene.id, 'startEndAssetIds', newIds);
-                const assetsToUse = newAssetsToAdd.length > 0 ? [...assets, ...newAssetsToAdd] : assets;
-                scheduleAssetUpdate(newIds, assetsToUse, 'video');
             } else {
+                // Allow duplicate tags in prompt — dedup for videoAssetIds, append all to prompt
                 const currentVideoIds = scene.videoAssetIds || scene.assetIds?.slice(0, 3) || [];
                 const uniqueNewIds = assetIdsToAdd.filter(id => !currentVideoIds.includes(id));
-                if (currentVideoIds.length + uniqueNewIds.length > 3) {
-                    alert(language === 'Chinese'
-                        ? `视频参考图最多只能添加3张 (当前已选${currentVideoIds.length}张, 尝试添加${uniqueNewIds.length}张)`
-                        : `Video storyboard supports a maximum of 3 reference assets (Current: ${currentVideoIds.length}, Adding: ${uniqueNewIds.length})`);
-                    return;
-                }
                 if (uniqueNewIds.length > 0) {
                     const newIds = [...currentVideoIds, ...uniqueNewIds];
-                    const assetsToUse = newAssetsToAdd.length > 0 ? [...assets, ...newAssetsToAdd] : assets;
                     onUpdate(scene.id, 'videoAssetIds', newIds);
-                    scheduleAssetUpdate(newIds, assetsToUse, 'video');
                 }
+                // Sync: append @图像 tags to video prompt (allows duplicates)
+                let prompt = scene.video_prompt || scene.visual_desc || '';
+                const promptField = scene.video_prompt ? 'video_prompt' : 'visual_desc';
+                for (const id of assetIdsToAdd) {
+                    prompt = appendTagToPrompt(prompt, id, newAssetsToAdd);
+                }
+                onUpdate(scene.id, promptField, prompt);
             }
         } else {
             const currentIds = scene.assetIds || [];
             const uniqueNewIds = assetIdsToAdd.filter(id => !currentIds.includes(id));
             if (uniqueNewIds.length > 0) {
                 const newIds = [...currentIds, ...uniqueNewIds];
-                const assetsToUse = newAssetsToAdd.length > 0 ? [...assets, ...newAssetsToAdd] : assets;
                 onUpdate(scene.id, 'assetIds', newIds);
-                scheduleAssetUpdate(newIds, assetsToUse, 'image');
+                // Sync: append @图像 tags to image prompt
+                let prompt = scene.np_prompt || '';
+                for (const id of uniqueNewIds) {
+                    prompt = appendTagToPrompt(prompt, id, newAssetsToAdd);
+                }
+                onUpdate(scene.id, 'np_prompt', prompt);
             }
         }
         setActiveAssetSelector('none');
+    };
+
+    // Helper: remove @图像 tags matching an asset from prompt text
+    // Uses EXACT matching only (name or #id) — no fuzzy includes()
+    const removeTagFromPrompt = (prompt: string, assetId: string): string => {
+        const asset = assets.find(a => a.id === assetId);
+        if (!asset || !prompt) return prompt;
+        return prompt.replace(
+            ASSET_TAG_REGEX,
+            (match, tagName, tagIdAnchor) => {
+                // Match by #id anchor (exact)
+                if (tagIdAnchor && tagIdAnchor === asset.id) return '';
+                // Match by exact name or exact id
+                if (tagName === asset.name || tagName === asset.id) return '';
+                return match;
+            }
+        ).replace(/\s{2,}/g, ' ');
     };
 
     const handleRemoveAsset = (assetId: string, mode: 'image' | 'video' = 'image') => {
@@ -221,35 +171,58 @@ export function useSceneAssets(props: UseSceneAssetsProps) {
                 if (scene.video_prompt_backup) {
                     onUpdate(scene.id, 'video_prompt', scene.video_prompt_backup);
                     onUpdate(scene.id, 'video_prompt_backup', undefined);
-                } else {
-                    scheduleAssetUpdate(newIds, assets, 'video');
                 }
             } else {
                 const currentVideoIds = scene.videoAssetIds || scene.assetIds?.slice(0, 3) || [];
                 const newIds = currentVideoIds.filter(id => id !== assetId);
                 onUpdate(scene.id, 'videoAssetIds', newIds);
-                scheduleAssetUpdate(newIds, assets, 'video');
+                // Sync: remove @图像 tag from video prompt
+                if (scene.video_prompt) {
+                    onUpdate(scene.id, 'video_prompt', removeTagFromPrompt(scene.video_prompt, assetId));
+                } else if (scene.visual_desc) {
+                    onUpdate(scene.id, 'visual_desc', removeTagFromPrompt(scene.visual_desc, assetId));
+                }
             }
         } else {
             const currentIds = scene.assetIds || [];
             const newIds = currentIds.filter(id => id !== assetId);
             onUpdate(scene.id, 'assetIds', newIds);
-            scheduleAssetUpdate(newIds, assets, 'image');
+            // Sync: remove @图像 tag from image prompt
+            if (scene.np_prompt) {
+                onUpdate(scene.id, 'np_prompt', removeTagFromPrompt(scene.np_prompt, assetId));
+            }
         }
     };
 
-    // ── Scene images memo ──
-    const sceneImages = useMemo(() => {
-        return chapterScenes
-            .filter(s => !!(s.imageUrl || s.imageAssetId))
-            .map(s => ({
-                id: `scene_img_${s.id}`,
-                name: `Scene ${s.id}`,
-                description: s.visual_desc || "Generated storyboard",
-                type: 'item' as const,
-                refImageUrl: s.imageUrl,
-                refImageAssetId: s.imageAssetId
+    // ── Scene images with async fallback ──
+    const [sceneImages, setSceneImages] = useState<{
+        id: string; name: string; description: string;
+        type: 'item'; refImageUrl?: string; refImageAssetId?: string;
+    }[]>([]);
+
+    useEffect(() => {
+        let cancelled = false;
+        const resolve = async () => {
+            const candidates = chapterScenes.filter(s => !!(s.imageUrl || s.imageAssetId));
+            const resolved = await Promise.all(candidates.map(async s => {
+                let url = s.imageUrl;
+                // Fallback: load from IndexedDB when Blob URL is missing/expired
+                if (!url && s.imageAssetId) {
+                    url = await loadAssetBase64(s.imageAssetId) || undefined;
+                }
+                return {
+                    id: `scene_img_${s.id}`,
+                    name: `分镜${s.id}`,
+                    description: s.visual_desc || "Generated storyboard",
+                    type: 'item' as const,
+                    refImageUrl: url,
+                    refImageAssetId: s.imageAssetId
+                };
             }));
+            if (!cancelled) setSceneImages(resolved);
+        };
+        resolve();
+        return () => { cancelled = true; };
     }, [chapterScenes]);
 
     // ── Initialize video asset IDs when image first appears ──
@@ -264,12 +237,36 @@ export function useSceneAssets(props: UseSceneAssetsProps) {
         }
     };
 
+    // ── @ Mention handlers (from MentionTextarea) ──
+    const handleMentionVideo = (assetId: string) => {
+        const current = scene.videoAssetIds || [];
+        // Allow duplicate mentions — only add to videoAssetIds if not already present (dedup)
+        if (!current.includes(assetId)) {
+            onUpdate(scene.id, 'videoAssetIds', [...current, assetId]);
+        }
+    };
+
+    const handleUnmentionVideo = (assetId: string) => {
+        const current = scene.videoAssetIds || [];
+        onUpdate(scene.id, 'videoAssetIds', current.filter(id => id !== assetId));
+    };
+
+    const handleMentionImage = (assetId: string) => {
+        const current = scene.assetIds || [];
+        if (!current.includes(assetId)) {
+            onUpdate(scene.id, 'assetIds', [...current, assetId]);
+        }
+    };
+
+    const handleUnmentionImage = (assetId: string) => {
+        const current = scene.assetIds || [];
+        onUpdate(scene.id, 'assetIds', current.filter(id => id !== assetId));
+    };
+
     return {
         // State
         useAssets, setUseAssets,
         activeAssetSelector, setActiveAssetSelector,
-        promptGenLoading,
-        videoPromptUpdating,
         sceneImages,
 
         // Handlers
@@ -278,5 +275,9 @@ export function useSceneAssets(props: UseSceneAssetsProps) {
         handleSpecCommit,
         handleLocalSpecChange,
         initializeVideoAssetIds,
+        handleMentionVideo,
+        handleUnmentionVideo,
+        handleMentionImage,
+        handleUnmentionImage,
     };
 }

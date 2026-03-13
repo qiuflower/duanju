@@ -8,21 +8,12 @@ export default defineConfig(() => {
       port: 3000,
       host: '0.0.0.0',
       proxy: {
-        '/api/t8star': {
+        '/api': {
           target: 'http://localhost:3002',
           changeOrigin: true,
           secure: false,
-          timeout: 300000, // 5 minutes
-          proxyTimeout: 300000, // 5 minutes
-          // rewrite: (path) => path.replace(/^\/api\/t8star/, '') // Don't rewrite, let backend handle it
-        },
-        '/api/polo': {
-          target: 'http://localhost:3002',
-          changeOrigin: true,
-          secure: false,
-          timeout: 300000, // 5 minutes
-          proxyTimeout: 300000, // 5 minutes
-          // rewrite: (path) => path.replace(/^\/api\/polo/, '') // Don't rewrite, let backend handle it
+          timeout: 300000,
+          proxyTimeout: 300000,
         }
       }
     },

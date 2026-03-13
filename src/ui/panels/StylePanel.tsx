@@ -73,13 +73,18 @@ const StylePanel: React.FC<StylePanelProps> = ({ styleState, onStyleChange, labe
 
 
     const updateSetting = (type: 'director' | 'work' | 'texture', field: keyof StyleSetting, value: any) => {
-        onStyleChange({
+        const updated: GlobalStyle = {
             ...styleState,
             [type]: {
                 ...styleState[type],
                 [field]: value
             }
-        });
+        };
+        // 当修改参考作品或画面质感时，清除缓存的 Visual DNA，强制下次重新生成
+        if (type === 'work' || type === 'texture') {
+            updated.visualTags = '';
+        }
+        onStyleChange(updated);
     };
 
     const handleVoicePreview = async () => {

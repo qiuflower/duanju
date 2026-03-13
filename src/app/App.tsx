@@ -18,7 +18,7 @@ const App: React.FC = () => {
         isAutoMode, setIsAutoMode, autoAssetTrigger, setAutoAssetTrigger,
         autoShootTrigger, handleAssetBatchComplete,
         updateChunk, handleLoadNovel, handleAnalyze,
-        handleChunkExtract, handleChunkScript, handleImportChunk,
+        handleChunkExtract, handleChunkScript, handleGenerateBeats, handleGeneratePrompts, handleImportChunk,
         handleManualExtractAssets,
         flashScene, handleSceneUpdate, handleDuplicateScene,
         handleGenerateImageWrapper, handleUpdateAsset, handleAddAsset, handleDeleteAsset,
@@ -171,6 +171,8 @@ const App: React.FC = () => {
                             onDuplicateScene={handleDuplicateScene}
                             onExtract={handleChunkExtract}
                             onGenerateScript={handleChunkScript}
+                            onGenerateBeats={handleGenerateBeats}
+                            onGeneratePrompts={handleGeneratePrompts}
                             onGenerateImage={handleGenerateImageWrapper}
                             language={language}
                             isActive={expandedId === chunk.id}

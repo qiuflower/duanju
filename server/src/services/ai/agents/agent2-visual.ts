@@ -1,5 +1,5 @@
-import { GenerateContentResponse } from "@/shared/types";
-import { PROMPTS } from "@/domain/generation/prompts";
+import { GenerateContentResponse } from "../../../shared/types";
+import { PROMPTS } from "../../../domain/generation/prompts";
 import { retryWithBackoff, safeJsonParse, Type, ai } from "../helpers";
 import { MODELS } from "../model-manager";
 import { NarrativeBlueprint, MasterBeatSheet } from "./types";
@@ -9,11 +9,12 @@ import { NarrativeBlueprint, MasterBeatSheet } from "./types";
 export const runAgent2_VisualDirection = async (
     blueprint: NarrativeBlueprint,
     language: string,
-    lensLibraryPrompt: string
+    lensLibraryPrompt: string,
+    originalScript: string = ""
 ): Promise<MasterBeatSheet> => {
     const blueprintStr = JSON.stringify(blueprint);
 
-    const sysPrompt = PROMPTS.AGENT_2_VISUAL(language, lensLibraryPrompt);
+    const sysPrompt = PROMPTS.AGENT_2_VISUAL(language, lensLibraryPrompt, originalScript);
 
     const agent2Schema = {
         type: Type.OBJECT,
@@ -43,9 +44,12 @@ export const runAgent2_VisualDirection = async (
                         camera_movement: { type: Type.STRING },
                         lighting: { type: Type.STRING },
                         audio_subtext: { type: Type.STRING },
-                        asset_ids: { type: Type.ARRAY, items: { type: Type.STRING } }
+                        asset_ids: { type: Type.ARRAY, items: { type: Type.STRING } },
+                        narrative_function: { type: Type.STRING },
+                        cause_from: { type: Type.STRING },
+                        emotional_intensity: { type: Type.NUMBER }
                     },
-                    required: ["beat_id", "shot_id", "visual_action", "camera_movement", "lighting", "audio_subtext"]
+                    required: ["beat_id", "shot_id", "visual_action", "camera_movement", "lighting", "audio_subtext", "narrative_function", "cause_from", "emotional_intensity"]
                 }
             }
         },
@@ -67,7 +71,6 @@ export const runAgent2_VisualDirection = async (
         beats: []
     });
 
-    // AI sometimes returns non-standard array formats — normalize
     if (Array.isArray(result) && result.length > 0) {
         if (result[0].beats) {
             console.warn(`[Agent2] Response wrapped in array, unwrapping.`);

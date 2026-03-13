@@ -7,28 +7,30 @@ export interface DialogueLine {
 export interface Scene {
   id: string;
   narration: string;
-  
+
   // Replaced simple visual_desc with detailed video specs
   visual_desc: string; // Keeps backward compatibility, but now acts as "Video Description"
   video_duration?: string; // e.g. "3s"
   video_camera?: string; // e.g. "Pan right", "Dolly in"
   video_lens?: string; // e.g. "35mm", "Wide angle"
   video_vfx?: string; // e.g. "Rain particles"
-  
+
   np_prompt: string; // The Image Prompt
-  
+
   // Multimodal Fields (Agent B)
   video_prompt?: string; // Full constructed video prompt
   audio_dialogue?: DialogueLine[];
   audio_sfx?: string;
   audio_bgm?: string;
 
-  imageUrl?: string; 
+  imageUrl?: string;
   imageAssetId?: string; // New: Persistent ID for image Blob in IndexedDB
-  videoUrl?: string; // New: Generated Video URL
-  videoAssetId?: string; // New: Persistent ID for video Blob in IndexedDB
+  videoUrl?: string; // Generated Video URL (standard reference mode)
+  videoAssetId?: string; // Persistent ID for video Blob in IndexedDB (standard reference mode)
+  startEndVideoUrl?: string; // Generated Video URL (start/end frame mode)
+  startEndVideoAssetId?: string; // Persistent ID for video Blob in IndexedDB (start/end frame mode)
   narrationAudioUrl?: string; // New: Generated Narration Audio URL (Blob URL)
-  
+
   assetIds?: string[]; // IDs of assets appearing in this scene (Image Mode)
   videoAssetIds?: string[]; // IDs of assets used specifically for Video Mode (Independent from Image Mode)
   startEndAssetIds?: string[]; // IDs for Start/End Frame Mode [StartID, EndID?]
@@ -56,11 +58,11 @@ export interface Asset {
   description: string;
   type: 'character' | 'location' | 'item';
   visualDna?: string; // Specific visual tags for this asset
-  refImageUrl?: string; 
+  refImageUrl?: string;
   refImageAssetId?: string; // New: Persistent ID for ref image Blob in IndexedDB
   prompt?: string; // The prompt used to generate the reference image
-  parentId?: string; 
-  variantName?: string; 
+  parentId?: string;
+  variantName?: string;
 }
 
 export enum AnalysisStatus {
@@ -80,10 +82,10 @@ export enum ImageGenStatus {
 
 export interface StyleSetting {
   selected: string;
-  custom?: string; 
-  strength: number; 
-  seed: string; 
-  options: string[]; 
+  custom?: string;
+  strength: number;
+  seed: string;
+  options: string[];
   useOriginalCharacters?: boolean; // Checkbox: Whether to use original characters from the reference work
 }
 
@@ -110,11 +112,12 @@ export interface NovelChunk {
   index: number;
   title?: string; // User-editable title
   text: string;
-  status: 'idle' | 'extracting' | 'extracted' | 'scripting' | 'scripted' | 'shooting' | 'completed';
+  status: 'idle' | 'extracting' | 'extracted' | 'scripting' | 'storyboarded' | 'scripted' | 'shooting' | 'completed';
   assets: Asset[];
   scenes: Scene[];
   episodeData?: EpisodePlan; // New: Stores the Agent 1 plan for this episode
   batchMeta?: any; // New: Stores the narrative state context
+  beatSheet?: any; // Cached MasterBeatSheet from Agent 2, used for Step 2 prompt generation
 }
 
 export type ContentPart = {

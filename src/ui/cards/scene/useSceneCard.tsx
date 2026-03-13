@@ -17,6 +17,7 @@ export interface UseSceneCardProps {
     onVideoGenerated?: (id: string, url: string, assetId?: string) => void;
     globalStyle: GlobalStyle;
     areAssetsReady?: boolean;
+    videoAssetsReady?: boolean;
     assets?: Asset[];
     onAddAsset?: (asset: Asset | Asset[]) => void;
     language?: string;
@@ -33,6 +34,7 @@ export function useSceneCard(props: UseSceneCardProps) {
         onGenerateImageOverride, onImageGenerated, onVideoGenerated,
         globalStyle,
         areAssetsReady = true,
+        videoAssetsReady = true,
         assets = [],
         onAddAsset,
         language = 'Chinese',
@@ -49,7 +51,7 @@ export function useSceneCard(props: UseSceneCardProps) {
     const mediaState = useSceneMedia({
         scene, characterDesc, globalStyle, assets,
         useAssets: assetState.useAssets,
-        areAssetsReady, language, onUpdate,
+        areAssetsReady, language, chapterScenes, onUpdate,
         onGenerateImageOverride, onImageGenerated, onVideoGenerated
     });
 
@@ -72,7 +74,7 @@ export function useSceneCard(props: UseSceneCardProps) {
                 assetState.initializeVideoAssetIds();
             }
         }
-    }, [scene.imageUrl, scene.videoUrl, scene.narrationAudioUrl]);
+    }, [scene.imageUrl, scene.videoUrl, scene.narrationAudioUrl, scene.isStartEndFrameMode, scene.startEndVideoUrl, scene.startEndVideoAssetId]);
 
     // ── Reload video element on source change ──
     useEffect(() => {
@@ -106,14 +108,12 @@ export function useSceneCard(props: UseSceneCardProps) {
         setUseAssets: assetState.setUseAssets,
         activeAssetSelector: assetState.activeAssetSelector,
         setActiveAssetSelector: assetState.setActiveAssetSelector,
-        promptGenLoading: assetState.promptGenLoading,
-        videoPromptUpdating: assetState.videoPromptUpdating,
         sceneImages: assetState.sceneImages,
 
         // Props pass-through
         scene, labels, onUpdate, onDelete, onDuplicate,
         globalStyle, assets, onAddAsset, language, chapterScenes,
-        flash, isGeneratingExternal, areAssetsReady,
+        flash, isGeneratingExternal, areAssetsReady, videoAssetsReady,
 
         // Handlers from media
         handleGenerateImage: mediaState.handleGenerateImage,
@@ -123,6 +123,11 @@ export function useSceneCard(props: UseSceneCardProps) {
         handleUploadClick: mediaState.handleUploadClick,
         handleFileChange: mediaState.handleFileChange,
         handleRefresh: mediaState.handleRefresh,
+        handleDeleteImage: mediaState.handleDeleteImage,
+        handleDeleteVideo: mediaState.handleDeleteVideo,
+        handleVideoUploadClick: mediaState.handleVideoUploadClick,
+        handleVideoFileChange: mediaState.handleVideoFileChange,
+        videoFileInputRef: mediaState.videoFileInputRef,
         saveImage: mediaState.saveImage,
 
         // Handlers from assets
@@ -130,6 +135,10 @@ export function useSceneCard(props: UseSceneCardProps) {
         handleRemoveAsset: assetState.handleRemoveAsset,
         handleSpecCommit: assetState.handleSpecCommit,
         handleLocalSpecChange: assetState.handleLocalSpecChange,
+        handleMentionVideo: assetState.handleMentionVideo,
+        handleUnmentionVideo: assetState.handleUnmentionVideo,
+        handleMentionImage: assetState.handleMentionImage,
+        handleUnmentionImage: assetState.handleUnmentionImage,
     };
 }
 

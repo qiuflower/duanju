@@ -23,6 +23,7 @@ interface SceneCardProps {
     onVideoGenerated?: (id: string, url: string, assetId?: string) => void;
     globalStyle: GlobalStyle;
     areAssetsReady?: boolean;
+    videoAssetsReady?: boolean;
     assets?: Asset[];
     onAddAsset?: (asset: Asset | Asset[]) => void;
     language?: string;
@@ -50,13 +51,19 @@ const SceneCard: React.FC<SceneCardProps> = (props) => {
                     hasVideo={state.hasVideo}
                     isGeneratingExternal={state.isGeneratingExternal}
                     areAssetsReady={state.areAssetsReady}
+                    videoAssetsReady={state.videoAssetsReady}
                     onGenerateImage={state.handleGenerateImage}
                     onGenerateVideo={state.handleGenerateVideo}
                     onUploadClick={state.handleUploadClick}
                     onRefresh={state.handleRefresh}
+                    onDeleteImage={state.handleDeleteImage}
+                    onDeleteVideo={state.handleDeleteVideo}
+                    onVideoUploadClick={state.handleVideoUploadClick}
                     onSaveImage={state.saveImage}
                     fileInputRef={state.fileInputRef}
                     onFileChange={state.handleFileChange}
+                    videoFileInputRef={state.videoFileInputRef}
+                    onVideoFileChange={state.handleVideoFileChange}
                 />
 
                 {/* RIGHT COLUMN: CONTENT */}
@@ -85,13 +92,19 @@ const SceneCard: React.FC<SceneCardProps> = (props) => {
                             hasImage={state.hasImage}
                             useAssets={state.useAssets}
                             setUseAssets={state.setUseAssets}
-                            videoPromptUpdating={state.videoPromptUpdating}
                             assets={state.assets}
                             chapterScenes={state.chapterScenes}
                             onRemoveAsset={state.handleRemoveAsset}
                             onOpenAssetSelector={() => state.setActiveAssetSelector('video')}
+                            onMentionAsset={state.handleMentionVideo}
+                            onUnmentionAsset={state.handleUnmentionVideo}
+                            sceneImages={state.sceneImages}
                             onSpecCommit={state.handleSpecCommit}
                             onLocalSpecChange={state.handleLocalSpecChange}
+                            isStartEndFrameMode={state.scene.isStartEndFrameMode}
+                            startEndAssetIds={state.scene.startEndAssetIds}
+                            onOpenEndFrameSelector={() => state.setActiveAssetSelector('video')}
+                            onRemoveEndFrame={() => state.handleRemoveAsset(state.scene.startEndAssetIds?.[1] || '', 'video')}
                         />
 
                         {/* RIGHT PANE: IMAGE + DIALOGUE */}
@@ -101,11 +114,13 @@ const SceneCard: React.FC<SceneCardProps> = (props) => {
                                 scene={state.scene}
                                 labels={state.labels}
                                 onUpdate={state.onUpdate}
-                                promptGenLoading={state.promptGenLoading}
                                 assets={state.assets}
                                 chapterScenes={state.chapterScenes}
                                 onRemoveAsset={state.handleRemoveAsset}
                                 onOpenAssetSelector={() => state.setActiveAssetSelector('image')}
+                                onMentionAsset={state.handleMentionImage}
+                                onUnmentionAsset={state.handleUnmentionImage}
+                                sceneImages={state.sceneImages}
                             />
 
                             {/* Bottom: Dialogue & Audio Section */}
@@ -122,7 +137,7 @@ const SceneCard: React.FC<SceneCardProps> = (props) => {
             {state.activeAssetSelector !== 'none' && (
                 <AssetSelector
                     assets={state.assets}
-                    selectedIds={state.activeAssetSelector === 'video' ? (state.scene.videoAssetIds || []) : (state.scene.assetIds || [])}
+                    selectedIds={state.activeAssetSelector === 'video' ? (state.scene.isStartEndFrameMode ? (state.scene.startEndAssetIds || []) : (state.scene.videoAssetIds || [])) : (state.scene.assetIds || [])}
                     onSelect={state.handleAddAsset}
                     onClose={() => state.setActiveAssetSelector('none')}
                     onAssetCreated={state.onAddAsset}

@@ -67,6 +67,8 @@ export type Translation = {
   chunkLabel: string;
   btnExtract: string;
   btnScript: string;
+  btnStoryboard: string;
+  btnGeneratePrompts: string;
   btnShoot: string;
   btnDownload: string;
   btnDelete: string;
@@ -113,7 +115,7 @@ export const translations: Record<string, Translation> = {
     errorNoPlot: "AI 未在提供的文本中发现实质性情节。",
     errorGeneric: "操作失败。请检查 API Key 或重试。",
     copy: "复制",
-    visualizeBtn: "视觉化",
+    visualizeBtn: "生成图片",
     openFull: "查看大图",
     tabScript: "剧本输入",
     tabAssets: "资产设定 (DNA)",
@@ -158,6 +160,8 @@ export const translations: Record<string, Translation> = {
     chunkLabel: "章节片段",
     btnExtract: "生成资产设定",
     btnScript: "生成分镜脚本",
+    btnStoryboard: "生成分镜",
+    btnGeneratePrompts: "生成提示词",
     btnShoot: "一键拍摄",
     btnDownload: "下载资产包 (ZIP)",
     btnDelete: "删除章节",
@@ -247,6 +251,8 @@ export const translations: Record<string, Translation> = {
     chunkLabel: "Chapter Chunk",
     btnExtract: "Generate Asset Settings",
     btnScript: "Generate Script",
+    btnStoryboard: "Storyboard",
+    btnGeneratePrompts: "Gen Prompts",
     btnShoot: "Shoot All",
     btnDownload: "Download ZIP",
     btnDelete: "Delete Chunk",
