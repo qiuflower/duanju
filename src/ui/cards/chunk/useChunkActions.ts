@@ -163,9 +163,37 @@ export function useChunkActions({
 
     const handleShoot = async () => {
         if (chunk.status === 'shooting' && generatingSceneIds.length > 0) return;
-        onUpdateChunk(chunk.id, { status: 'shooting' });
 
-        const scenesToProcess = chunk.scenes.filter(s => !s.imageUrl && !s.imageAssetId && !!s.np_prompt?.trim());
+        const allScenesWithPrompt = chunk.scenes.filter(s => !!s.np_prompt?.trim());
+        const scenesWithoutImage = allScenesWithPrompt.filter(s => !s.imageUrl && !s.imageAssetId);
+        const scenesWithImage = allScenesWithPrompt.filter(s => !!s.imageUrl || !!s.imageAssetId);
+
+        let scenesToProcess: Scene[];
+
+        if (allScenesWithPrompt.length === 0) {
+            // No scenes with prompts — nothing to do
+            return;
+        } else if (scenesWithoutImage.length === allScenesWithPrompt.length) {
+            // Case 1: No images at all → generate all directly, no confirm needed
+            scenesToProcess = scenesWithoutImage;
+        } else if (scenesWithoutImage.length > 0) {
+            // Case 2: Partial images → confirm, generate only missing ones or all
+            const confirmMsg = language === 'Chinese'
+                ? `${scenesWithImage.length}/${allScenesWithPrompt.length} 个分镜已有图片。\n\n点击「确定」仅生成缺失的 ${scenesWithoutImage.length} 张图片。\n点击「取消」不执行操作。`
+                : `${scenesWithImage.length}/${allScenesWithPrompt.length} scenes already have images.\n\nClick OK to generate the ${scenesWithoutImage.length} missing images.\nClick Cancel to abort.`;
+            if (!window.confirm(confirmMsg)) return;
+            scenesToProcess = scenesWithoutImage;
+        } else {
+            // Case 3: All scenes already have images → ask to regenerate
+            const confirmMsg = language === 'Chinese'
+                ? `所有 ${allScenesWithPrompt.length} 个分镜已有图片，是否重新生成全部？`
+                : `All ${allScenesWithPrompt.length} scenes already have images. Regenerate all?`;
+            if (!window.confirm(confirmMsg)) return;
+            scenesToProcess = allScenesWithPrompt;
+        }
+
+        if (scenesToProcess.length === 0) return;
+        onUpdateChunk(chunk.id, { status: 'shooting' });
         const CONCURRENCY = 10;
 
         const processScene = async (scene: Scene) => {
@@ -205,6 +233,8 @@ export function useChunkActions({
             await Promise.all(executing);
         } catch (e) {
             console.error("Batch shoot failed", e);
+        } finally {
+            onUpdateChunk(chunk.id, { status: 'completed' });
         }
     };
 
