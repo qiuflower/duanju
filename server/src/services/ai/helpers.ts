@@ -29,6 +29,112 @@ export const retryWithBackoff = async <T>(
     throw new Error("retryWithBackoff exhausted");
 };
 
+/**
+ * Sanitize a JSON string by escaping unescaped control characters inside
+ * string values. AI models often return JSON where string values contain
+ * literal newlines, tabs, or other control chars that break JSON.parse.
+ */
+const sanitizeJsonString = (raw: string): string => {
+    // Walk through the string character-by-character, tracking whether we
+    // are currently inside a JSON string value. When inside a string, replace
+    // unescaped control characters (U+0000–U+001F) with their JSON escape forms.
+    const out: string[] = [];
+    let inString = false;
+    let escaped = false;
+
+    for (let i = 0; i < raw.length; i++) {
+        const ch = raw[i];
+        const code = raw.charCodeAt(i);
+
+        if (escaped) {
+            // Previous char was a backslash inside a string – emit as-is
+            out.push(ch);
+            escaped = false;
+            continue;
+        }
+
+        if (inString) {
+            if (ch === '\\') {
+                escaped = true;
+                out.push(ch);
+            } else if (ch === '"') {
+                inString = false;
+                out.push(ch);
+            } else if (code < 0x20) {
+                // Control character inside a string – must be escaped
+                switch (ch) {
+                    case '\n': out.push('\\n'); break;
+                    case '\r': out.push('\\r'); break;
+                    case '\t': out.push('\\t'); break;
+                    default: out.push('\\u' + code.toString(16).padStart(4, '0')); break;
+                }
+            } else {
+                out.push(ch);
+            }
+        } else {
+            if (ch === '"') {
+                inString = true;
+            }
+            out.push(ch);
+        }
+    }
+
+    return out.join('');
+};
+
+/**
+ * Aggressive JSON repair: fix unescaped double-quotes inside string values.
+ * Strategy: walk through char-by-char, tracking string context. When we hit
+ * a `"` that looks like it's INSIDE a value (the next chars aren't `,`, `}`,
+ * `]`, `:`, or whitespace followed by one of these structural chars) we
+ * escape it with `\"`.
+ */
+const repairJsonQuotes = (raw: string): string => {
+    const out: string[] = [];
+    let inString = false;
+    let escaped = false;
+
+    for (let i = 0; i < raw.length; i++) {
+        const ch = raw[i];
+
+        if (escaped) {
+            out.push(ch);
+            escaped = false;
+            continue;
+        }
+
+        if (inString) {
+            if (ch === '\\') {
+                escaped = true;
+                out.push(ch);
+            } else if (ch === '"') {
+                // Is this a real string-closing quote or an unescaped interior quote?
+                // Look ahead: skip whitespace, then check for structural JSON char
+                let j = i + 1;
+                while (j < raw.length && (raw[j] === ' ' || raw[j] === '\t' || raw[j] === '\r' || raw[j] === '\n')) j++;
+                const next = raw[j];
+                if (next === undefined || next === ',' || next === '}' || next === ']' || next === ':') {
+                    // Looks like a real closing quote
+                    inString = false;
+                    out.push(ch);
+                } else {
+                    // Interior unescaped quote — escape it
+                    out.push('\\"');
+                }
+            } else {
+                out.push(ch);
+            }
+        } else {
+            if (ch === '"') {
+                inString = true;
+            }
+            out.push(ch);
+        }
+    }
+
+    return out.join('');
+};
+
 export const safeJsonParse = <T>(text: string | undefined, fallback: T): T => {
     if (!text) return fallback;
     try {
@@ -43,9 +149,28 @@ export const safeJsonParse = <T>(text: string | undefined, fallback: T): T => {
             cleaned = cleaned.slice(0, -3);
         }
         cleaned = cleaned.trim();
-        return JSON.parse(cleaned);
+
+        // First attempt: parse as-is
+        try {
+            return JSON.parse(cleaned);
+        } catch (_firstErr) {
+            // Second attempt: sanitize control characters inside string values
+            const sanitized = sanitizeJsonString(cleaned);
+            try {
+                return JSON.parse(sanitized);
+            } catch (_secondErr) {
+                // Third attempt: repair unescaped quotes + sanitize control chars
+                const repaired = repairJsonQuotes(sanitizeJsonString(cleaned));
+                try {
+                    return JSON.parse(repaired);
+                } catch (thirdErr) {
+                    console.error("safeJsonParse failed after all repair attempts:", thirdErr, "Input:", text?.substring(0, 300));
+                    return fallback;
+                }
+            }
+        }
     } catch (e) {
-        console.error("safeJsonParse failed:", e, "Input:", text?.substring(0, 200));
+        console.error("safeJsonParse failed:", e, "Input:", text?.substring(0, 300));
         return fallback;
     }
 };

@@ -36,7 +36,7 @@ export function arrayBufferToBase64(buffer: ArrayBuffer) {
     return btoa(binary);
 }
 
-function normalizeAudioVoice(voiceName: string) {
+export function normalizeAudioVoice(voiceName: string) {
     const v = (voiceName || "").trim();
     const lower = v.toLowerCase();
     if (

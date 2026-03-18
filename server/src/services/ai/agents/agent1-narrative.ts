@@ -4,7 +4,7 @@ import { retryWithBackoff, safeJsonParse, wait, Type, ai } from "../helpers";
 import { MODELS } from "../model-manager";
 import { NarrativeBlueprint } from "./types";
 
-// --- AGENT 1: NARRATIVE ARCHITECT ---
+// --- AGENT 1: NARRATIVE ARCHITECT ---, photorealistic, cinematic lighting, unreal engine 5 render, volumetric fog, octane render --ar ${aspectRatio} --v 6.0 [特征精细保持] [光影一致性]
 
 export const runAgent1_NarrativeAnalysis = async (
     text: string,
@@ -20,7 +20,7 @@ export const runAgent1_NarrativeAnalysis = async (
 
     let batches: { start: number, end: number }[] = [{ start: 1, end: -1 }];
     let isSplitMode = false;
-    const MAX_EPISODES_PER_BATCH = 20;
+    const MAX_EPISODES_PER_BATCH = 1;
 
     if (episodeCount && episodeCount > 0) {
         if (episodeCount > MAX_EPISODES_PER_BATCH) {
@@ -82,7 +82,7 @@ export const runAgent1_NarrativeAnalysis = async (
         let batchContext = currentContext;
         if (i > 0 && allEpisodes.length > 0) {
             const lastEp = allEpisodes[allEpisodes.length - 1];
-            batchContext += `\n\n[Previous Batch Summary]: Ended at Episode ${lastEp.episode_number}. \nLast Cliffhanger: "${lastEp.structure_breakdown?.cliffhanger_last_15s?.narrative_action || "Unknown"}". \n\n**INSTRUCTION**: You MUST start Episode ${lastEp.episode_number + 1} by resolving or escalating this exact cliffhanger. Maintain seamless narrative continuity. Do NOT restart the story.`;
+            batchContext += `\n\n[Previous Batch Summary]: Ended at Episode ${lastEp.episode_number}. \nLast Episode Script Ending: "${(lastEp.script || '').slice(-200)}". \n\n**INSTRUCTION**: You MUST start Episode ${lastEp.episode_number + 1} by resolving or escalating the cliffhanger from the previous episode. Maintain seamless narrative continuity. Do NOT restart the story.`;
         }
 
         const sysPrompt = PROMPTS.AGENT_1_NARRATIVE(
@@ -128,50 +128,11 @@ export const runAgent1_NarrativeAnalysis = async (
                             episode_number: { type: Type.NUMBER },
                             title: { type: Type.STRING },
                             logline: { type: Type.STRING },
-                            structure_breakdown: {
-                                type: Type.OBJECT,
-                                properties: {
-                                    hook_0_15s: {
-                                        type: Type.OBJECT,
-                                        properties: {
-                                            narrative_action: { type: Type.STRING },
-                                            visual_intent: { type: Type.STRING },
-                                            connection_to_prev: { type: Type.STRING }
-                                        }
-                                    },
-                                    incident_15_60s: {
-                                        type: Type.OBJECT,
-                                        properties: {
-                                            narrative_action: { type: Type.STRING },
-                                            pacing: { type: Type.STRING }
-                                        }
-                                    },
-                                    rising_action_60_180s: {
-                                        type: Type.OBJECT,
-                                        properties: {
-                                            key_beats: { type: Type.ARRAY, items: { type: Type.STRING } }
-                                        }
-                                    },
-                                    climax_spectacle_180_240s: {
-                                        type: Type.OBJECT,
-                                        properties: {
-                                            narrative_action: { type: Type.STRING },
-                                            visual_spectacle_requirement: { type: Type.STRING },
-                                            emotional_tone: { type: Type.STRING }
-                                        }
-                                    },
-                                    cliffhanger_last_15s: {
-                                        type: Type.OBJECT,
-                                        properties: {
-                                            narrative_action: { type: Type.STRING },
-                                            question_posed: { type: Type.STRING }
-                                        }
-                                    }
-                                }
-                            },
-                            character_instructions: { type: Type.OBJECT }
+                            script: { type: Type.STRING },
+                            character_instructions: { type: Type.OBJECT },
+                            mentioned_chapters: { type: Type.ARRAY, items: { type: Type.STRING } }
                         },
-                        required: ["episode_number", "title", "structure_breakdown"]
+                        required: ["episode_number", "title", "script"]
                     }
                 }
             },
@@ -184,16 +145,17 @@ export const runAgent1_NarrativeAnalysis = async (
         for (let attempt = 1; attempt <= MAX_BATCH_RETRIES; attempt++) {
             try {
                 if (attempt > 1 && onProgress) {
-                    onProgress(`Batch ${currentBatchNum}/${totalBatches} retry ${attempt}/${MAX_BATCH_RETRIES}...`);
+                    onProgress(`[Agent1][Batch ${currentBatchNum}/${totalBatches}][Retry ${attempt}/${MAX_BATCH_RETRIES}]...`);
                 }
 
                 const response = await retryWithBackoff<GenerateContentResponse>(() => ai.models.generateContent({
                     model: MODELS.TEXT_FAST,
-                    contents: { parts: [{ text: `Analyze the text and generate the blueprint for ${episodeRange}.` }] },
+                    contents: { parts: [{ text: `Analyze the text and generate COMPLETE SCREENPLAY SCRIPTS (剧本) for ${episodeRange}. Each episode MUST have a full 'script' field (≥3000 chars, target 5000+). The script field must NOT be empty.` }] },
                     config: {
                         systemInstruction: sysPrompt,
                         responseMimeType: "application/json",
-                        responseSchema: narrativeSchema
+                        responseSchema: narrativeSchema,
+                        maxOutputTokens: 65536
                     }
                 }), 3, 5000);
 
@@ -250,9 +212,9 @@ export const runAgent1_NarrativeAnalysis = async (
                     }
                 }
 
-                console.warn(`[Agent1] Batch ${currentBatchNum}/${totalBatches} attempt ${attempt} returned no valid episodes.`);
+                console.warn(`[Agent1][Batch ${currentBatchNum}/${totalBatches}][Retry ${attempt}/${MAX_BATCH_RETRIES}] returned no valid episodes.`);
             } catch (e: any) {
-                console.error(`[Agent1] Batch ${currentBatchNum}/${totalBatches} attempt ${attempt} failed:`, e?.message || e);
+                console.error(`[Agent1][Batch ${currentBatchNum}/${totalBatches}][Retry ${attempt}/${MAX_BATCH_RETRIES}] failed:`, e?.message || e);
                 if (attempt < MAX_BATCH_RETRIES) {
                     await wait(Math.pow(2, attempt) * 2000);
                 }
@@ -260,8 +222,10 @@ export const runAgent1_NarrativeAnalysis = async (
         }
 
         if (!batchSuccess) {
-            console.error(`[Agent1] Batch ${currentBatchNum}/${totalBatches} (Episodes ${batch.start}-${batch.end}) failed after ${MAX_BATCH_RETRIES} retries. Skipping.`);
-            if (onProgress) onProgress(`Batch ${currentBatchNum}/${totalBatches} failed, continuing...`);
+            const msg = `[Agent1][Batch ${currentBatchNum}/${totalBatches}] Episodes ${batch.start}-${batch.end} failed after ${MAX_BATCH_RETRIES} retries.`;
+            console.error(msg);
+            if (onProgress) onProgress(`⚠ Batch ${currentBatchNum}/${totalBatches} failed after ${MAX_BATCH_RETRIES} retries.`);
+            throw new Error(msg);
         }
     }
 

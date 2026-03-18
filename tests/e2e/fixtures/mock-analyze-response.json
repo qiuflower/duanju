@@ -1,0 +1,24 @@
+{
+    "episodes": [
+        {
+            "episode_number": 1,
+            "title": "雨夜惊变",
+            "logline": "苏小小与林远在暴雨夜遭遇古桥坍塌，揭开神秘事件序幕",
+            "text": "夜幕降临，古镇笼罩在淅淅沥沥的秋雨之中...",
+            "structure_breakdown": {
+                "opening": "雨夜氛围营造",
+                "development": "少年少女相遇",
+                "climax": "石桥坍塌惊变",
+                "resolution": "两人逃离险境"
+            },
+            "character_instructions": {
+                "苏小小": "16岁少女，灵动大眼，穿水蓝棉裙",
+                "林远": "邻家少年，书院学生"
+            },
+            "mentioned_chapters": [
+                "第一章"
+            ]
+        }
+    ],
+    "context": "古镇悬疑故事，雨夜场景"
+}

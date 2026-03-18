@@ -1,0 +1,26 @@
+{
+    "assets": [
+        {
+            "id": "asset_su_xiaoxiao",
+            "name": "苏小小",
+            "description": "16岁少女，一双灵动大眼睛，穿水蓝色棉布裙子",
+            "type": "character",
+            "visualDna": "少女 | 灵动大眼 | 水蓝棉裙 | 油纸伞"
+        },
+        {
+            "id": "asset_lin_yuan",
+            "name": "林远",
+            "description": "邻家少年，书院学生，拿着破旧黑伞",
+            "type": "character",
+            "visualDna": "少年 | 书卷气 | 黑伞"
+        },
+        {
+            "id": "asset_ancient_town",
+            "name": "古镇",
+            "description": "青石板路，红灯笼，老宅，石桥",
+            "type": "location",
+            "visualDna": "古镇 | 青石板 | 红灯笼 | 老宅"
+        }
+    ],
+    "visualDna": "中国古风水墨 | 雨夜氛围 | 灯笼暖光"
+}

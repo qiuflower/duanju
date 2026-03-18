@@ -1,5 +1,5 @@
 import { Router, Request, Response } from 'express';
-import { generateAssetImage, generateSceneImage } from '../services/ai/media/image';
+import { generateAssetImage, generateSceneImage, buildAssetPrompt } from '../services/ai/media/image';
 import { submitVideoGeneration, pollVideoStatus } from '../services/ai/media/video';
 import { generateSpeech } from '../services/ai/media/audio';
 
@@ -8,12 +8,12 @@ const router = Router();
 // POST /api/media/asset-image
 router.post('/asset-image', async (req: Request, res: Response) => {
     try {
-        const { asset, globalStyle, existingAssets } = req.body;
+        const { asset, globalStyle, existingAssets, overridePrompt, referenceImage } = req.body;
         if (!asset) {
             return res.status(400).json({ error: 'Missing required field: asset' });
         }
 
-        const result = await generateAssetImage(asset, globalStyle, existingAssets || []);
+        const result = await generateAssetImage(asset, globalStyle, existingAssets || [], overridePrompt, referenceImage);
         res.json(result);
     } catch (e: any) {
         console.error('[Media/asset-image]', e);
@@ -90,6 +90,25 @@ router.post('/speech', async (req: Request, res: Response) => {
         res.json(result);
     } catch (e: any) {
         console.error('[Media/speech]', e);
+        res.status(500).json({ error: e?.message || 'Internal error' });
+    }
+});
+
+// POST /api/media/build-asset-prompts — Pre-generate prompts (pure computation, no AI)
+router.post('/build-asset-prompts', (req: Request, res: Response) => {
+    try {
+        const { assets, globalStyle } = req.body;
+        if (!assets || !globalStyle) {
+            return res.status(400).json({ error: 'Missing required fields: assets, globalStyle' });
+        }
+
+        const result = assets.map((asset: any) => ({
+            ...asset,
+            prompt: asset.prompt || buildAssetPrompt(asset, globalStyle)
+        }));
+        res.json({ assets: result });
+    } catch (e: any) {
+        console.error('[Media/build-asset-prompts]', e);
         res.status(500).json({ error: e?.message || 'Internal error' });
     }
 });

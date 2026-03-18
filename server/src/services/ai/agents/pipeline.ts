@@ -45,7 +45,7 @@ export const analyzeNarrative = async (
 };
 
 // --- Helper: compute stylePrefix from GlobalStyle ---
-function computeStylePrefix(style: GlobalStyle): string {
+export function computeStylePrefix(style: GlobalStyle): string {
     const useOriginalCharacters = style.work?.useOriginalCharacters || false;
     const workStyle = style.work?.custom || (style.work?.selected !== 'None' ? style.work?.selected : '') || '';
 
@@ -84,7 +84,7 @@ export const generateBeatSheet = async (
             episodes: [{
                 ...episode,
                 _USER_EDITED_CONTENT_STRICT_: overrideText,
-                _INSTRUCTION_TO_AGENT_2_: "CRITICAL: The user has MANUALLY EDITED the script content. IGNORE the 'structure_breakdown' fields below if they conflict. Generate beats based strictly on the '_USER_EDITED_CONTENT_STRICT_' field above."
+                _INSTRUCTION_TO_AGENT_2_: "CRITICAL: The user has MANUALLY EDITED the script content. IGNORE the 'script' field below if it conflicts. Generate beats based strictly on the '_USER_EDITED_CONTENT_STRICT_' field above."
             }]
         };
     } else {
@@ -100,10 +100,18 @@ export const generateBeatSheet = async (
         () => runAgent2_VisualDirection(singleEpBlueprint, language, compactLensLibrary, overrideText || ""),
         (res) => res && Array.isArray(res.beats) && res.beats.length > 0,
         "Agent 2 (Visual Director)",
-        { episode: episode.episode_number, language }
+        { episode: episode.episode_number, language },
+        1 // Agent 2 handles retries internally
     );
 
-    const beatAssets = await extractAssetsFromBeats(beatSheet, language, existingAssets, workStyle, useOriginalCharacters);
+    let beatAssets = await extractAssetsFromBeats(beatSheet, language, existingAssets, workStyle, useOriginalCharacters);
+    for (let attempt = 1; beatAssets.length === 0 && attempt <= 3; attempt++) {
+        console.warn(`[generateBeatSheet] Asset extraction returned empty, retry ${attempt}/3...`);
+        beatAssets = await extractAssetsFromBeats(beatSheet, language, existingAssets, workStyle, useOriginalCharacters);
+    }
+    if (beatAssets.length === 0) {
+        throw new Error('Asset extraction failed after 3 retries — no assets extracted from beats. Please try again.');
+    }
 
     const epNum = episode.episode_number || 0;
     const emptyScenes: Scene[] = beatSheet.beats.map((beat: any) => ({
@@ -132,23 +140,35 @@ export const generatePromptsFromBeats = async (
     assets: Asset[],
     style: GlobalStyle
 ): Promise<{ scenes: Scene[]; visualDna: string }> => {
-    // Visual DNA 优先级：
-    // 1. 用户自定义画面质感文本 → 直接使用（一模一样）
-    // 2. 已有 visualTags（来自图片分析） → 直接使用
-    // 3. 都没有 → 通过 AI 从 workStyle 生成
+    // Visual DNA 优先级（高→低）：
+    // 1. 1:1 还原 + 参考作品 → 跳过 DNA，stylePrefix 由 computeStylePrefix 处理为 "{作品名}美术风格"
+    // 2. 参考作品 + 画面质感 → AI 融合两者
+    // 3. 画面质感单独 → 直接使用原文
+    // 4. 已有 visualTags（来自图片分析） → 直接使用
+    // 5. 参考作品单独 → 通过 AI 推断
     const workStyle = style.work?.custom || (style.work?.selected !== 'None' ? style.work?.selected : '') || '';
     const textureStyle = style.texture?.custom || (style.texture?.selected !== 'None' ? style.texture?.selected : '') || '';
+    const useOriginalCharacters = style.work?.useOriginalCharacters || false;
 
     let visualDna = '';
-    if (textureStyle) {
+    if (useOriginalCharacters && workStyle.trim()) {
+        // #1: 1:1 还原 = 最高优先级，跳过所有 DNA 计算
+        // computeStylePrefix 会将 stylePrefix 设为 "{作品名}美术风格"
+        visualDna = '';
+    } else if (workStyle && textureStyle) {
+        // #2: 两者同时存在 → AI 融合
+        const fused = await extractVisualDna(workStyle, textureStyle, language);
+        visualDna = fused || textureStyle; // fallback to texture if fusion fails
+    } else if (textureStyle) {
+        // #3: 画面质感单独 → 原文直传
         visualDna = textureStyle;
     } else if (style.visualTags) {
+        // #4: 缓存（来自图片分析等）
         visualDna = style.visualTags;
     } else if (workStyle) {
+        // #5: 参考作品单独 → AI 推断
         const freshDna = await extractVisualDna(workStyle, '', language);
-        if (freshDna) {
-            visualDna = freshDna;
-        }
+        if (freshDna) visualDna = freshDna;
     }
     style = { ...style, visualTags: visualDna };
 
@@ -158,7 +178,8 @@ export const generatePromptsFromBeats = async (
         () => runAgent3_AssetProduction(beatSheet, language, assets, stylePrefix, style.aspectRatio || '16:9'),
         (res) => res && Array.isArray(res) && res.length > 0,
         "Agent 3 (Asset Producer)",
-        { beatCount: beatSheet.beats.length }
+        { beatCount: beatSheet.beats.length },
+        1 // Agent 3 handles retries internally
     );
 
     const labeledScenes = scenes.map(scene => ({

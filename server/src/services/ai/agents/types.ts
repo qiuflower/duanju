@@ -8,14 +8,8 @@ export interface NarrativeBlueprint {
         episode_number: number;
         title: string;
         logline: string;
-        structure_breakdown: {
-            hook_0_15s: { narrative_action: string; visual_intent: string; connection_to_prev?: string };
-            incident_15_60s: { narrative_action: string; pacing?: string };
-            rising_action_60_180s: { key_beats: string[] };
-            climax_spectacle_180_240s: { narrative_action: string; visual_spectacle_requirement: string; emotional_tone?: string };
-            cliffhanger_last_15s: { narrative_action: string; question_posed: string };
-        };
-        character_instructions: Record<string, string>;
+        script: string;
+        character_instructions?: Record<string, string>;
         mentioned_chapters?: string[];
     }[];
 }

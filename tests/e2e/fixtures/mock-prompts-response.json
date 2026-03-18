@@ -1,0 +1,54 @@
+{
+    "scenes": [
+        {
+            "id": "s001",
+            "narration": "夜幕降临，古镇沉浸在连绵秋雨中",
+            "visual_desc": "Wide establishing shot of an ancient Chinese town in autumn rain",
+            "video_duration": "5s",
+            "video_camera": "Slow dolly forward",
+            "video_lens": "24mm Wide Angle",
+            "np_prompt": "Ancient Chinese town at night, rain falling on cobblestone streets, red lanterns glowing warmly along old wooden buildings, water puddles reflecting the lantern light, atmospheric fog, cinematic wide shot, @图像_苏小小",
+            "video_prompt": "Camera slowly dollies forward through rain-soaked ancient Chinese town streets, red lanterns swaying",
+            "audio_dialogue": [],
+            "audio_sfx": "rain, distant thunder",
+            "audio_bgm": "atmospheric Chinese folk"
+        },
+        {
+            "id": "s002",
+            "narration": "苏小小撑着油纸伞走在回家的路上",
+            "visual_desc": "Medium tracking shot of a young girl with oil-paper umbrella",
+            "video_duration": "4s",
+            "video_camera": "Tracking shot",
+            "video_lens": "50mm Standard",
+            "np_prompt": "A 16-year-old Chinese girl @图像_苏小小 walking with an oil-paper umbrella in the rain, wearing a light blue cotton dress, bright expressive eyes, lantern-lit ancient street background",
+            "video_prompt": "Camera tracks a young girl with an oil-paper umbrella walking through rain, her blue dress swaying",
+            "audio_dialogue": [
+                {
+                    "speaker": "林远",
+                    "text": "小小，等等我！"
+                }
+            ],
+            "audio_sfx": "footsteps on wet stone",
+            "audio_bgm": ""
+        },
+        {
+            "id": "s003",
+            "narration": "石桥在雨中轰然坍塌",
+            "visual_desc": "Dynamic handheld shot of bridge collapsing",
+            "video_duration": "6s",
+            "video_camera": "Handheld dynamic tracking",
+            "video_lens": "28mm Wide",
+            "np_prompt": "Ancient stone bridge collapsing in heavy rain, two teenagers running away in panic, @图像_苏小小 @图像_林远, dramatic water splash, lightning flash illuminating the scene",
+            "video_prompt": "Bridge violently shakes and collapses behind running teenagers, massive water splash, dramatic rain",
+            "audio_dialogue": [
+                {
+                    "speaker": "林远",
+                    "text": "快走！"
+                }
+            ],
+            "audio_sfx": "stone cracking, water splashing, crumbling",
+            "audio_bgm": "intense dramatic"
+        }
+    ],
+    "visualDna": "中国古镇水墨风格 | 暖色灯笼冷色雨夜对比 | 电影化光影"
+}

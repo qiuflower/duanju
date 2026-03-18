@@ -100,9 +100,18 @@ export const generateEpisodeScenes = async (
 export const generateAssetImage = async (
     asset: Asset,
     globalStyle?: GlobalStyle,
-    existingAssets: Asset[] = []
+    overridePrompt?: string,
+    referenceImage?: string
 ): Promise<any> => {
-    return post('/media/asset-image', { asset, globalStyle, existingAssets });
+    return post('/media/asset-image', { asset, globalStyle, overridePrompt, referenceImage });
+};
+
+/** Pre-generate prompts for assets (pure computation, no AI call) */
+export const buildAssetPrompts = async (
+    assets: Asset[],
+    globalStyle: GlobalStyle
+): Promise<{ assets: Asset[] }> => {
+    return post('/media/build-asset-prompts', { assets, globalStyle });
 };
 
 /** Generate a scene image (storyboard) */

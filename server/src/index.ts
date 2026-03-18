@@ -25,9 +25,9 @@ if (process.env.NODE_ENV === 'production') {
     app.use(cors());
 }
 
-// Parse JSON body (50MB limit for base64 images)
-app.use(express.json({ limit: '50mb' }));
-app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+// Parse JSON body (200MB limit for large base64 image payloads)
+app.use(express.json({ limit: '200mb' }));
+app.use(express.urlencoded({ extended: true, limit: '200mb' }));
 
 // Simple in-memory rate limiter
 const rateLimitMap = new Map();

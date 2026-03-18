@@ -31,7 +31,7 @@ export const runAgent3_AssetProduction = async (
     const FIXED_BATCH_COUNT = 4;
     const clampedBeats = allBeats.slice(0, MAX_TOTAL_BEATS);
     if (clampedBeats.length < MIN_TOTAL_BEATS) {
-        console.warn(`[Agent3] Only ${clampedBeats.length} beats received (min ${MIN_TOTAL_BEATS}). Proceeding with available beats.`);
+        // Below minimum beats threshold — proceed silently with available beats
     }
     const totalBeats = clampedBeats.length;
     const batchCount = FIXED_BATCH_COUNT;
@@ -87,7 +87,7 @@ export const runAgent3_AssetProduction = async (
             required: ["scenes"]
         };
 
-        const MAX_BATCH_RETRIES = 2;
+        const MAX_BATCH_RETRIES = 3;
         let batchSuccess = false;
 
         const prevBatchLastBeatId = i > 0 ? clampedBeats[start - 1]?.beat_id : null;
@@ -98,7 +98,7 @@ export const runAgent3_AssetProduction = async (
         for (let attempt = 1; attempt <= MAX_BATCH_RETRIES; attempt++) {
             try {
                 if (onProgress) {
-                    onProgress(`Asset Production: Batch ${i + 1}/${batchCount}${attempt > 1 ? ` (retry ${attempt})` : ''}...`);
+                    onProgress(`Asset Production: Batch ${i + 1}/${batchCount}${attempt > 1 ? ` [Retry ${attempt}/${MAX_BATCH_RETRIES}]` : ''}...`);
                 }
 
                 const response = await retryWithBackoff<GenerateContentResponse>(() => ai.models.generateContent({
@@ -116,13 +116,10 @@ export const runAgent3_AssetProduction = async (
                 let batchScenes: Scene[];
                 if (Array.isArray(parsed) && parsed.length > 0) {
                     if (parsed[0].scenes) {
-                        console.warn(`[Agent3] Response wrapped in array (nested format), unwrapping.`);
                         batchScenes = parsed[0].scenes;
                     } else if (parsed.some((item: any) => item.id !== undefined && item.np_prompt !== undefined)) {
-                        console.warn(`[Agent3] Response is a flat array, filtering to scene objects only.`);
                         batchScenes = parsed.filter((item: any) => item.id !== undefined && item.np_prompt !== undefined);
                     } else {
-                        console.warn(`[Agent3] Response is an unrecognized array format, using as-is.`);
                         batchScenes = parsed;
                     }
                 } else {
@@ -179,7 +176,7 @@ export const runAgent3_AssetProduction = async (
                 batchSuccess = true;
                 break;
             } catch (batchError: any) {
-                console.error(`[Agent3] Batch ${i + 1}/${batchCount} attempt ${attempt}/${MAX_BATCH_RETRIES} failed (beats ${start}-${end}):`, batchError?.message || batchError);
+                console.error(`[Agent3][Batch ${i + 1}/${batchCount}][Retry ${attempt}/${MAX_BATCH_RETRIES}] failed (beats ${start}-${end}):`, batchError?.message || batchError);
                 if (attempt < MAX_BATCH_RETRIES) {
                     await wait(Math.pow(2, attempt) * 2000);
                 }
@@ -187,10 +184,12 @@ export const runAgent3_AssetProduction = async (
         }
 
         if (!batchSuccess) {
-            console.error(`[Agent3] Batch ${i + 1}/${batchCount} (beats ${start}-${end}) permanently failed after ${MAX_BATCH_RETRIES} retries.`);
+            const msg = `[Agent3][Batch ${i + 1}/${batchCount}] beats ${start}-${end} failed after ${MAX_BATCH_RETRIES} retries.`;
+            console.error(msg);
             if (onProgress) {
-                onProgress(`⚠ Batch ${i + 1}/${batchCount} failed after ${MAX_BATCH_RETRIES} retries, ${end - start} scenes skipped.`);
+                onProgress(`⚠ Batch ${i + 1}/${batchCount} failed after ${MAX_BATCH_RETRIES} retries.`);
             }
+            throw new Error(msg);
         }
     }
 

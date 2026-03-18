@@ -1,7 +1,9 @@
 import React, { useRef } from 'react';
 import { AnalysisStatus, Scene, Asset, GlobalStyle, NovelChunk } from '@/shared/types';
-import { extractAssets, extractVisualDna, analyzeNarrative, generateEpisodeScenes, generateBeatSheet, generatePromptsFromBeats } from '@/services/ai';
+import { extractAssets, extractVisualDna, analyzeNarrative, generateEpisodeScenes, generateBeatSheet, generatePromptsFromBeats, buildAssetPrompts } from '@/services/ai';
 import { loadAssetUrl, saveAsset } from '@/services/storage';
+import { mergeAssetsIntoGlobal, pruneOrphanedGlobalAssets } from '@/app/assetUtils';
+import { parseImportData } from '@/app/chunkUtils';
 import JSZip from 'jszip';
 
 interface ChunkManagerDeps {
@@ -79,34 +81,24 @@ export function useChunkManager(deps: ChunkManagerDeps) {
                 setGlobalStyle(prev => ({ ...prev, visualTags: result.visualDna }));
             }
 
+            // Pre-generate prompts for extracted assets
+            let enrichedExtracted = result.assets;
+            try {
+                const promptResult = await buildAssetPrompts(result.assets, globalStyle);
+                enrichedExtracted = promptResult.assets;
+            } catch (e) { console.warn('Pre-gen prompts failed:', e); }
+
+            // Merge into global (update fields, preserve existing refImageUrl)
             const currentAssets = globalAssetsRef.current;
-            const newAssets = [...currentAssets];
-            let hasChanges = false;
+            const previousIds = chunk.assets.map(a => a.id);
+            const newAssetIds = enrichedExtracted.map(a => a.id);
+            const { merged, hasChanges } = mergeAssetsIntoGlobal(currentAssets, enrichedExtracted);
+            // Conditionally prune orphaned assets from global
+            const pruned = pruneOrphanedGlobalAssets(merged, previousIds, newAssetIds, chunks, chunk.id);
+            if (hasChanges || pruned !== merged) setGlobalAssets(pruned);
 
-            result.assets.forEach(extractedAsset => {
-                const existingIndex = newAssets.findIndex(ga => ga.id === extractedAsset.id);
-                if (existingIndex === -1) {
-                    newAssets.push(extractedAsset);
-                    hasChanges = true;
-                } else {
-                    const existing = newAssets[existingIndex];
-                    newAssets[existingIndex] = {
-                        ...existing,
-                        description: extractedAsset.description,
-                        refImageUrl: existing.refImageUrl,
-                        refImageAssetId: existing.refImageAssetId,
-                        name: extractedAsset.name || existing.name,
-                        type: extractedAsset.type || existing.type,
-                        visualDna: extractedAsset.visualDna || existing.visualDna
-                    };
-                    hasChanges = true;
-                }
-            });
-
-            if (hasChanges) setGlobalAssets(newAssets);
-
-            const chunkAssets = result.assets.map(extracted => {
-                return newAssets.find(ga => ga.id === extracted.id) || extracted;
+            const chunkAssets = enrichedExtracted.map(extracted => {
+                return pruned.find(ga => ga.id === extracted.id) || extracted;
             });
 
             updateChunk(chunk.id, { assets: chunkAssets });
@@ -120,21 +112,35 @@ export function useChunkManager(deps: ChunkManagerDeps) {
     };
 
     const handleManualExtractAssets = async (text: string) => {
+        // Fall back to full novel text or active chunk text when textarea is empty
+        let textToUse = text;
+        if (!textToUse.trim()) {
+            textToUse = fullNovelText || chunks.map(c => c.text).join('\n');
+        }
+        if (!textToUse.trim()) return;
+
         setStatus(AnalysisStatus.EXTRACTING);
         try {
             const workStyle = globalStyle.work.custom || (globalStyle.work.selected !== 'None' ? globalStyle.work.selected : '');
             const textureStyle = globalStyle.texture.custom || (globalStyle.texture.selected !== 'None' ? globalStyle.texture.selected : '');
             const useOriginalCharacters = globalStyle.work.useOriginalCharacters || false;
 
-            const result = await extractAssets(text, language, globalAssetsRef.current, workStyle, textureStyle, useOriginalCharacters);
+            const result = await extractAssets(textToUse, language, globalAssetsRef.current, workStyle, textureStyle, useOriginalCharacters);
 
             if (result.visualDna) {
                 setGlobalStyle(prev => ({ ...prev, visualTags: result.visualDna }));
             }
 
+            // Pre-generate prompts for extracted assets
+            let enrichedAssets = result.assets;
+            try {
+                const promptResult = await buildAssetPrompts(result.assets, globalStyle);
+                enrichedAssets = promptResult.assets;
+            } catch (e) { console.warn('Pre-gen prompts failed:', e); }
+
             setGlobalAssets(prev => {
                 const newAssets = [...prev];
-                result.assets.forEach(extracted => {
+                enrichedAssets.forEach(extracted => {
                     if (!newAssets.some(ga => ga.id === extracted.id)) {
                         newAssets.push(extracted);
                     }
@@ -220,29 +226,32 @@ export function useChunkManager(deps: ChunkManagerDeps) {
                     chunk.episodeData, chunk.batchMeta, language, globalStyle, globalAssetsRef.current, chunk.text
                 );
 
-                // Merge new assets into global state
-                const currentAssets = globalAssetsRef.current;
-                const newAssets = [...currentAssets];
-                let hasChanges = false;
-                assets.forEach(a => {
-                    if (!newAssets.some(g => g.id === a.id)) {
-                        newAssets.push(a);
-                        hasChanges = true;
-                    }
-                });
-                if (hasChanges) setGlobalAssets(newAssets);
+                // Pre-generate prompts for beat-extracted assets
+                let enrichedBeatAssets = assets;
+                try {
+                    const promptResult = await buildAssetPrompts(assets, globalStyle);
+                    enrichedBeatAssets = promptResult.assets;
+                } catch (e) { console.warn('Pre-gen prompts failed:', e); }
 
-                // Enrich A2 assets with existing ref images from globalAssets
-                const enrichedAssets = assets.map(a => {
-                    const existing = currentAssets.find(g => g.id === a.id);
-                    return existing ? { ...a, refImageUrl: existing.refImageUrl, refImageAssetId: existing.refImageAssetId } : a;
+                // Merge into global (update fields, preserve existing refImageUrl)
+                const currentAssets = globalAssetsRef.current;
+                const previousIds = chunk.assets.map(a => a.id);
+                const newAssetIds = enrichedBeatAssets.map(a => a.id);
+                const { merged, hasChanges } = mergeAssetsIntoGlobal(currentAssets, enrichedBeatAssets);
+                // Conditionally prune orphaned assets from global
+                const pruned = pruneOrphanedGlobalAssets(merged, previousIds, newAssetIds, chunks, chunk.id);
+                if (hasChanges || pruned !== merged) setGlobalAssets(pruned);
+
+                // Use latest extracted assets for the chunk
+                const chunkAssets = enrichedBeatAssets.map(a => {
+                    return pruned.find(g => g.id === a.id) || a;
                 });
 
                 updateChunk(chunk.id, {
                     status: 'storyboarded',
                     scenes,
                     beatSheet,
-                    assets: enrichedAssets,
+                    assets: chunkAssets,
                 });
                 return scenes;
             }
@@ -355,16 +364,7 @@ export function useChunkManager(deps: ChunkManagerDeps) {
 
             const jsonStr = await dataFile.async("string");
             const importedData = JSON.parse(jsonStr);
-            if (!importedData.scenes || !importedData.text) throw new Error("Invalid chunk data");
-            if (!Array.isArray(importedData.scenes)) throw new Error("Invalid scenes: must be array");
-            if (typeof importedData.text !== 'string') throw new Error("Invalid text: must be string");
-            if (importedData.assets && !Array.isArray(importedData.assets)) throw new Error("Invalid assets: must be array");
-
-            const newChunk: NovelChunk = {
-                ...importedData,
-                id: `chunk_${Date.now()}_import`,
-                status: 'scripted',
-            };
+            const newChunk = parseImportData(importedData);
 
             const restoredAssets: Asset[] = [];
             for (const asset of (importedData.assets || [])) {
@@ -381,6 +381,7 @@ export function useChunkManager(deps: ChunkManagerDeps) {
             }
             newChunk.assets = restoredAssets;
 
+            // Import-safe merge: add new assets to global (keep refImageUrl), skip existing
             setGlobalAssets(prev => {
                 const next = [...prev];
                 restoredAssets.forEach(a => {
@@ -395,6 +396,8 @@ export function useChunkManager(deps: ChunkManagerDeps) {
                 let imageAssetId = scene.imageAssetId;
                 let videoUrl = scene.videoUrl;
                 let videoAssetId = scene.videoAssetId;
+                let startEndVideoUrl = scene.startEndVideoUrl;
+                let startEndVideoAssetId = scene.startEndVideoAssetId;
                 let narrationAudioUrl = scene.narrationAudioUrl;
 
                 const imgFile = zip.file(`images/${scene.id}.png`);
@@ -411,6 +414,13 @@ export function useChunkManager(deps: ChunkManagerDeps) {
                     const url = await loadAssetUrl(videoAssetId);
                     if (url) videoUrl = url;
                 }
+                const seVidFile = zip.file(`videos/${scene.id}_startend.mp4`);
+                if (seVidFile) {
+                    const blob = await seVidFile.async("blob");
+                    startEndVideoAssetId = await saveAsset(blob);
+                    const url = await loadAssetUrl(startEndVideoAssetId);
+                    if (url) startEndVideoUrl = url;
+                }
                 const audioFile = zip.file(`narration/${scene.id}_narration.wav`);
                 if (audioFile) {
                     const blob = await audioFile.async("blob");
@@ -419,7 +429,7 @@ export function useChunkManager(deps: ChunkManagerDeps) {
                     if (audioUrl) narrationAudioUrl = audioUrl;
                 }
 
-                restoredScenes.push({ ...scene, imageUrl, imageAssetId, videoUrl, videoAssetId, narrationAudioUrl });
+                restoredScenes.push({ ...scene, imageUrl, imageAssetId, videoUrl, videoAssetId, startEndVideoUrl, startEndVideoAssetId, narrationAudioUrl });
             }
             newChunk.scenes = restoredScenes;
 
@@ -458,7 +468,7 @@ export function useChunkManager(deps: ChunkManagerDeps) {
                         id: `ep_${Date.now()}_${ep.episode_number}_${idx}`,
                         index: ep.episode_number - 1,
                         title: `Ep ${ep.episode_number}: ${ep.title}`,
-                        text: `### Episode ${ep.episode_number}: ${ep.title}\n\n**Logline**: ${ep.logline}\n\n**Structure**: ${JSON.stringify(ep.structure_breakdown, null, 2)}`,
+                        text: `### Episode ${ep.episode_number}: ${ep.title}\n\n**Logline**: ${ep.logline}\n\n**Script**:\n${ep.script || ''}`,
                         status: 'idle',
                         assets: [],
                         scenes: [],

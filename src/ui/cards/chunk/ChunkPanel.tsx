@@ -1,7 +1,7 @@
 import React, { useEffect } from 'react';
 import { NovelChunk, Asset, GlobalStyle, Scene } from '@/shared/types';
 import { Translation } from '@/services/i18n/translations';
-import { ChevronDown, ChevronRight, Wand2, FileText, Video, Download, CheckCircle, Loader2, Film, AlertTriangle, AlertCircle, Trash2, X, Save } from 'lucide-react';
+import { ChevronDown, ChevronRight, Wand2, FileText, Video, Download, CheckCircle, Loader2, Film, AlertTriangle, AlertCircle, Trash2, Copy, X, Save } from 'lucide-react';
 import SceneCard from '@/ui/cards/scene/SceneCard';
 import { useChunkActions } from './useChunkActions';
 
@@ -12,6 +12,7 @@ interface ChunkPanelProps {
     labels: Translation;
     onUpdateChunk: (id: string, updates: Partial<NovelChunk>) => void;
     onDeleteChunk: (id: string) => void;
+    onCopyChunk: (id: string) => void;
     onSceneUpdate: (chunkId: string, sceneId: string, updates: Partial<Scene>) => void;
     onDuplicateScene: (chunkId: string, sceneId: string) => void;
     onExtract: (chunk: NovelChunk) => Promise<Asset[]>;
@@ -29,7 +30,7 @@ interface ChunkPanelProps {
 
 const ChunkPanel: React.FC<ChunkPanelProps> = ({
     chunk, globalAssets, styleState, labels,
-    onUpdateChunk, onDeleteChunk, onSceneUpdate, onDuplicateScene,
+    onUpdateChunk, onDeleteChunk, onCopyChunk, onSceneUpdate, onDuplicateScene,
     onExtract, onGenerateScript, onGenerateBeats, onGeneratePrompts, onGenerateImage,
     language, isActive, onToggle,
     autoShoot = false, isLocked = false, flashSceneId
@@ -98,6 +99,25 @@ const ChunkPanel: React.FC<ChunkPanelProps> = ({
 
                     <div className="flex items-center gap-2">
                         <button
+                            onClick={(e) => { e.stopPropagation(); onCopyChunk(chunk.id); }}
+                            className="p-1.5 text-gray-500 hover:text-blue-400 hover:bg-white/10 rounded transition-colors"
+                            title={language === 'Chinese' ? '复制章节' : 'Copy Chapter'}
+                        >
+                            <Copy className="w-4 h-4" />
+                        </button>
+                        <button
+                            onClick={(e) => { e.stopPropagation(); handleDownload(); }}
+                            disabled={exportProgress !== null}
+                            className="p-1.5 text-gray-500 hover:text-green-400 hover:bg-white/10 rounded transition-colors"
+                            title={language === 'Chinese' ? '下载资产包 (ZIP)' : 'Download ZIP'}
+                        >
+                            {exportProgress !== null ? (
+                                <div className="w-4 h-4 border-2 border-white/50 border-t-transparent rounded-full animate-spin" />
+                            ) : (
+                                <Download className="w-4 h-4" />
+                            )}
+                        </button>
+                        <button
                             onClick={(e) => { e.stopPropagation(); onDeleteChunk(chunk.id); }}
                             className="p-1.5 text-gray-500 hover:text-red-400 hover:bg-white/10 rounded transition-colors"
                             title={labels.btnDelete}
@@ -134,20 +154,7 @@ const ChunkPanel: React.FC<ChunkPanelProps> = ({
                         </div>
                     )}
 
-                    {(chunk.status === 'completed' || chunk.scenes.length > 0) && (
-                        <button onClick={handleDownload} disabled={exportProgress !== null} className="px-3 py-1.5 bg-white/10 hover:bg-white/20 rounded text-xs font-bold text-white flex items-center gap-2">
-                            {exportProgress !== null ? (
-                                <div className="flex items-center gap-2">
-                                    <div className="w-3 h-3 border-2 border-white/50 border-t-transparent rounded-full animate-spin" />
-                                    {Math.round(exportProgress)}%
-                                </div>
-                            ) : (
-                                <>
-                                    <Download className="w-4 h-4" /> {labels.btnDownload}
-                                </>
-                            )}
-                        </button>
-                    )}
+
 
                     <div className="group relative">
                         <button
@@ -183,27 +190,66 @@ const ChunkPanel: React.FC<ChunkPanelProps> = ({
                     </div>
 
                     <div className="group relative">
-                        <button
-                            onClick={(e) => { e.stopPropagation(); handleShoot(); }}
-                            disabled={chunk.scenes.length === 0}
-                            className={`px-3 py-1.5 rounded text-xs font-bold flex items-center gap-2 shadow-lg ${chunk.scenes.length > 0
-                                ? 'bg-banana-500 text-black hover:bg-banana-400 shadow-banana-500/20'
-                                : 'bg-gray-700 text-gray-500 cursor-not-allowed'
-                                }`}
-                        >
-                            <Video className="w-4 h-4" />
-                            {labels.btnShoot}
-                        </button>
+                        {(() => {
+                            const allReady = chunk.scenes.length > 0 && chunk.scenes.every(s => getSceneAssetsReady(s));
+                            const hasNoPrompts = chunk.scenes.length > 0 && chunk.scenes.some(s => !s.np_prompt?.trim());
+                            return (
+                                <>
+                                    <button
+                                        onClick={(e) => { e.stopPropagation(); handleShoot(); }}
+                                        disabled={!allReady}
+                                        className={`px-3 py-1.5 rounded text-xs font-bold flex items-center gap-2 shadow-lg ${allReady
+                                            ? 'bg-banana-500 text-black hover:bg-banana-400 shadow-banana-500/20'
+                                            : 'bg-gray-700 text-gray-500 cursor-not-allowed'
+                                            }`}
+                                    >
+                                        <Video className="w-4 h-4" />
+                                        {labels.btnShoot}
+                                    </button>
+                                    {!allReady && chunk.scenes.length > 0 && (
+                                        <div className="absolute bottom-full right-0 mb-2 w-48 bg-black/90 text-white text-[10px] p-2 rounded pointer-events-none hidden group-hover:block z-50 text-center">
+                                            {hasNoPrompts
+                                                ? (language === 'English' ? 'Generate prompts for all scenes first' : '请先为所有分镜生成提示词')
+                                                : (language === 'English' ? 'Generate all asset reference images first' : '请先生成所有资产参考图')}
+                                        </div>
+                                    )}
+                                </>
+                            );
+                        })()}
                     </div>
 
-                    <button
-                        onClick={(e) => { e.stopPropagation(); handleMakeFilm(); }}
-                        disabled={chunk.scenes.length === 0 || loadingStep === 'filming'}
-                        className="px-3 py-1.5 bg-red-500 text-white hover:bg-red-400 rounded text-xs font-bold flex items-center gap-2 shadow-lg shadow-red-500/20"
-                    >
-                        {loadingStep === 'filming' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Film className="w-4 h-4" />}
-                        {labels.btnFilm}
-                    </button>
+                    <div className="group relative">
+                        {(() => {
+                            const allHaveImages = chunk.scenes.length > 0 && chunk.scenes.every(s => !!s.imageUrl || !!s.imageAssetId);
+                            const allVideoReady = allHaveImages && chunk.scenes.every(s => getVideoAssetsReady(s));
+                            const filmReady = allVideoReady && loadingStep !== 'filming';
+                            const hasNoVideoPrompts = chunk.scenes.length > 0 && chunk.scenes.some(s => !s.video_prompt?.trim());
+                            return (
+                                <>
+                                    <button
+                                        onClick={(e) => { e.stopPropagation(); handleMakeFilm(); }}
+                                        disabled={!filmReady}
+                                        className={`px-3 py-1.5 rounded text-xs font-bold flex items-center gap-2 shadow-lg ${filmReady
+                                            ? 'bg-red-500 text-white hover:bg-red-400 shadow-red-500/20'
+                                            : 'bg-gray-700 text-gray-500 cursor-not-allowed'
+                                            }`}
+                                    >
+                                        {loadingStep === 'filming' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Film className="w-4 h-4" />}
+                                        {labels.btnFilm}
+                                    </button>
+                                    {!filmReady && chunk.scenes.length > 0 && loadingStep !== 'filming' && (
+                                        <div className="absolute bottom-full right-0 mb-2 w-48 bg-black/90 text-white text-[10px] p-2 rounded pointer-events-none hidden group-hover:block z-50 text-center">
+                                            {!allHaveImages
+                                                ? (language === 'English' ? 'Generate all scene images first' : '请先生成所有分镜图片')
+                                                : hasNoVideoPrompts
+                                                    ? (language === 'English' ? 'Generate prompts for all scenes first' : '请先为所有分镜生成提示词')
+                                                    : (language === 'English' ? 'Generate all referenced asset/scene images first' : '请先生成所有引用的资产/分镜图')}
+                                        </div>
+                                    )}
+                                </>
+                            );
+                        })()}
+                    </div>
                 </div>
 
                 {/* Content Body */}

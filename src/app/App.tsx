@@ -23,6 +23,7 @@ const App: React.FC = () => {
         flashScene, handleSceneUpdate, handleDuplicateScene,
         handleGenerateImageWrapper, handleUpdateAsset, handleAddAsset, handleDeleteAsset,
         handleDeleteChunk,
+        handleCopyChunk,
     } = useAppState();
 
     // ── Render ───────────────────────────────────────
@@ -167,6 +168,7 @@ const App: React.FC = () => {
                             labels={t}
                             onUpdateChunk={updateChunk}
                             onDeleteChunk={handleDeleteChunk}
+                            onCopyChunk={handleCopyChunk}
                             onSceneUpdate={handleSceneUpdate}
                             onDuplicateScene={handleDuplicateScene}
                             onExtract={handleChunkExtract}

@@ -9,14 +9,14 @@ type HistoryAction = {
     sceneSnapshot: Scene;
 };
 
-function deepClone<T>(value: T): T {
+export function deepClone<T>(value: T): T {
     if (typeof globalThis.structuredClone === 'function') {
         return globalThis.structuredClone(value);
     }
     return JSON.parse(JSON.stringify(value)) as T;
 }
 
-function ensureUniqueId(desiredId: string, existingIds: Set<string>) {
+export function ensureUniqueId(desiredId: string, existingIds: Set<string>) {
     if (!existingIds.has(desiredId)) return desiredId;
     let i = 2;
     let candidate = `${desiredId}_${i}`;
@@ -27,7 +27,7 @@ function ensureUniqueId(desiredId: string, existingIds: Set<string>) {
     return candidate;
 }
 
-function remapSelfAssetIds(ids: string[] | undefined, oldSceneId: string, newSceneId: string) {
+export function remapSelfAssetIds(ids: string[] | undefined, oldSceneId: string, newSceneId: string) {
     if (!ids) return ids;
     const oldSelfId = `scene_img_${oldSceneId}`;
     const newSelfId = `scene_img_${newSceneId}`;

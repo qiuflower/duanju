@@ -4,6 +4,7 @@ import { generateVideo, pollVideoUntilDone } from '@/services/ai';
 import { loadAssetUrl } from '@/services/storage';
 import { extractAssetTags, resolveTagToAsset, isStoryboardTag } from '@/shared/asset-tags';
 import JSZip from 'jszip';
+import { buildExportData } from '@/app/chunkUtils';
 import saveAs from 'file-saver';
 
 export interface UseChunkActionsProps {
@@ -163,7 +164,7 @@ export function useChunkActions({
         if (chunk.status === 'shooting' && generatingSceneIds.length > 0) return;
         onUpdateChunk(chunk.id, { status: 'shooting' });
 
-        const scenesToProcess = chunk.scenes.filter(s => !s.imageUrl);
+        const scenesToProcess = chunk.scenes.filter(s => !s.imageUrl && !s.imageAssetId && !!s.np_prompt?.trim());
         const CONCURRENCY = 10;
 
         const processScene = async (scene: Scene) => {
@@ -294,12 +295,7 @@ export function useChunkActions({
             const assetText = chunk.assets.map(a => `ID: ${a.id}\nName: ${a.name}\nDesc: ${a.description}\nDNA: ${a.visualDna || ''}`).join('\n---\n');
             zip.file("assets.txt", assetText);
 
-            const chunkData = {
-                chunkId: chunk.id,
-                text: chunk.text,
-                assets: chunk.assets,
-                scenes: chunk.scenes
-            };
+            const chunkData = buildExportData(chunk);
             zip.file("data.json", JSON.stringify(chunkData, null, 2));
 
             const imgFolder = zip.folder("images");
@@ -329,6 +325,9 @@ export function useChunkActions({
 
                 const vidBlob = await getBlob(scene.videoUrl, scene.videoAssetId);
                 if (vidBlob) vidFolder?.file(`${scene.id}.mp4`, vidBlob);
+
+                const seVidBlob = await getBlob(scene.startEndVideoUrl, scene.startEndVideoAssetId);
+                if (seVidBlob) vidFolder?.file(`${scene.id}_startend.mp4`, seVidBlob);
 
                 if (scene.narrationAudioUrl) {
                     const response = await fetch(scene.narrationAudioUrl);

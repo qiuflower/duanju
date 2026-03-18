@@ -7,6 +7,8 @@ import { useSessionRestore } from '@/features/useSessionRestore';
 import { useSceneManager } from '@/features/useSceneManager';
 import { useAutomation } from '@/features/useAutomation';
 import { useChunkManager } from '@/features/useChunkManager';
+import { buildCopiedChunk } from './chunkUtils';
+import { deleteAssetGlobal, deleteAssetLocal, pruneAssetsOnChunkDelete } from './assetUtils';
 
 export function useAppState() {
     // ── Core State ──────────────────────────────────
@@ -127,24 +129,29 @@ export function useAppState() {
 
     const handleDeleteAsset = (id: string) => {
         if (targetChunkId) {
-            setChunks(prev => prev.map(chunk => {
-                if (chunk.id !== targetChunkId) return chunk;
-                return { ...chunk, assets: chunk.assets.filter(a => a.id !== id) };
-            }));
+            // 局部删除: 仅从当前 chunk 移除
+            setChunks(prev => deleteAssetLocal(prev, targetChunkId, id));
         } else {
-            setGlobalAssets(prev => prev.filter(a => a.id !== id));
-            setChunks(prev => prev.map(chunk => ({
-                ...chunk, assets: chunk.assets.filter(a => a.id !== id)
-            })));
+            // 全局删除: 从 global + 所有 chunk 移除
+            const result = deleteAssetGlobal(globalAssets, chunks, id);
+            setGlobalAssets(result.globalAssets);
+            setChunks(result.chunks);
         }
     };
 
     const handleDeleteChunk = (chunkId: string) => {
         if (confirm(t.confirmDeleteChunk)) {
+            // 先清理孤儿资产(必须在删除 chunk 前执行, 需要读取被删 chunk 的 assets)
+            const pruned = pruneAssetsOnChunkDelete(globalAssets, chunks, chunkId);
+            if (pruned !== globalAssets) setGlobalAssets(pruned);
             setChunks(prev => prev.filter(c => c.id !== chunkId));
             if (activeChunkId === chunkId) setActiveChunkId(null);
             if (expandedId === chunkId) setExpandedId(null);
         }
+    };
+
+    const handleCopyChunk = (chunkId: string) => {
+        setChunks(prev => buildCopiedChunk(prev, chunkId));
     };
 
     return {
@@ -171,7 +178,8 @@ export function useAppState() {
         // Asset actions
         handleGenerateImageWrapper, handleUpdateAsset, handleAddAsset, handleDeleteAsset,
 
-        // Chunk delete
+        // Chunk delete & copy
         handleDeleteChunk,
+        handleCopyChunk,
     };
 }

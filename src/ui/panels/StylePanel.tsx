@@ -48,8 +48,10 @@ const StylePanel: React.FC<StylePanelProps> = ({ styleState, onStyleChange, labe
         setUploadImages(prev => prev.filter((_, i) => i !== index));
     };
 
+    const is1to1 = styleState.work?.useOriginalCharacters && (styleState.work?.custom || (styleState.work?.selected !== 'None' ? styleState.work?.selected : ''));
+
     const handleAnalyzeImages = async () => {
-        if (uploadImages.length === 0) return;
+        if (uploadImages.length === 0 || is1to1) return;
         setIsAnalyzing(true);
         try {
             const dna = await analyzeVisualStyleFromImages(uploadImages, language);
@@ -211,8 +213,9 @@ const StylePanel: React.FC<StylePanelProps> = ({ styleState, onStyleChange, labe
                             {uploadImages.length > 0 && (
                                 <button
                                     onClick={handleAnalyzeImages}
-                                    disabled={isAnalyzing}
+                                    disabled={isAnalyzing || !!is1to1}
                                     className="flex items-center gap-1 text-[10px] bg-banana-500 text-black px-2 py-1 rounded hover:bg-banana-400 transition-colors disabled:opacity-50"
+                                    title={is1to1 ? (language === 'Chinese' ? '1:1还原模式下无需分析图片' : 'Image analysis disabled in 1:1 Restore mode') : ''}
                                 >
                                     {isAnalyzing ? <div className="w-3 h-3 border-2 border-black/30 border-t-black rounded-full animate-spin" /> : <Sparkles className="w-3 h-3" />}
                                     Analyze

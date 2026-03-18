@@ -94,6 +94,10 @@ const InputPanel: React.FC<InputPanelProps> = ({
   const handleExtractClick = () => {
     if (text.trim()) {
       onExtractAssets(text);
+    } else if (novelStatus.hasNovel) {
+      // Novel loaded but local textarea is empty (e.g., session restore)
+      // Pass empty string — parent will fall back to chunk/novel text
+      onExtractAssets('');
     }
   };
 

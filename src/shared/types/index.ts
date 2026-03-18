@@ -103,8 +103,9 @@ export interface EpisodePlan {
   episode_number: number;
   title: string;
   logline: string;
-  structure_breakdown: any;
-  character_instructions: Record<string, string>;
+  structure_breakdown?: any;
+  script?: string;
+  character_instructions?: Record<string, string>;
 }
 
 export interface NovelChunk {

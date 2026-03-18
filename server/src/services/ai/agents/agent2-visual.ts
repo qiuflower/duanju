@@ -1,10 +1,12 @@
 import { GenerateContentResponse } from "../../../shared/types";
 import { PROMPTS } from "../../../domain/generation/prompts";
-import { retryWithBackoff, safeJsonParse, Type, ai } from "../helpers";
+import { retryWithBackoff, safeJsonParse, wait, Type, ai } from "../helpers";
 import { MODELS } from "../model-manager";
 import { NarrativeBlueprint, MasterBeatSheet } from "./types";
 
 // --- AGENT 2: VISUAL DIRECTOR ---
+
+const MAX_RETRIES = 3;
 
 export const runAgent2_VisualDirection = async (
     blueprint: NarrativeBlueprint,
@@ -56,45 +58,67 @@ export const runAgent2_VisualDirection = async (
         required: ["beats"]
     };
 
-    const response = await retryWithBackoff<GenerateContentResponse>(() => ai.models.generateContent({
-        model: MODELS.TEXT_FAST,
-        contents: { parts: [{ text: `Generate the complete Visual Beat Sheet (ALL beats from S01 to End) for the following Blueprint:\n${blueprintStr}` }] },
-        config: {
-            systemInstruction: sysPrompt,
-            responseMimeType: "application/json",
-            responseSchema: agent2Schema
-        }
-    }));
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+        try {
+            if (attempt > 1) {
+                console.warn(`[Agent2][Retry ${attempt}/${MAX_RETRIES}] Retrying visual direction...`);
+            }
 
-    let result = safeJsonParse<MasterBeatSheet>(response.text, {
-        visual_strategy: { core_atmosphere: "", key_lens_design: { opening_hook: "", metaphor: "" } },
-        beats: []
-    });
+            const response = await retryWithBackoff<GenerateContentResponse>(() => ai.models.generateContent({
+                model: MODELS.TEXT_FAST,
+                contents: { parts: [{ text: `Generate the complete Visual Beat Sheet (ALL beats from S01 to End) for the following Blueprint:\n${blueprintStr}` }] },
+                config: {
+                    systemInstruction: sysPrompt,
+                    responseMimeType: "application/json",
+                    responseSchema: agent2Schema
+                }
+            }));
 
-    if (Array.isArray(result) && result.length > 0) {
-        if (result[0].beats) {
-            console.warn(`[Agent2] Response wrapped in array, unwrapping.`);
-            result = result[0] as MasterBeatSheet;
-        } else if (result.some((item: any) => item.beat_id !== undefined)) {
-            console.warn(`[Agent2] Response is a flat array of beats, reassembling.`);
-            const strategyItem = result.find((item: any) => item.visual_strategy) as any;
-            result = {
-                visual_strategy: strategyItem?.visual_strategy || { core_atmosphere: "", key_lens_design: { opening_hook: "", metaphor: "" } },
-                beats: result.filter((item: any) => item.beat_id !== undefined)
-            } as MasterBeatSheet;
+            let result = safeJsonParse<MasterBeatSheet>(response.text, {
+                visual_strategy: { core_atmosphere: "", key_lens_design: { opening_hook: "", metaphor: "" } },
+                beats: []
+            });
+
+            if (Array.isArray(result) && result.length > 0) {
+                if (result[0].beats) {
+                    console.warn(`[Agent2] Response wrapped in array, unwrapping.`);
+                    result = result[0] as MasterBeatSheet;
+                } else if (result.some((item: any) => item.beat_id !== undefined)) {
+                    console.warn(`[Agent2] Response is a flat array of beats, reassembling.`);
+                    const strategyItem = result.find((item: any) => item.visual_strategy) as any;
+                    result = {
+                        visual_strategy: strategyItem?.visual_strategy || { core_atmosphere: "", key_lens_design: { opening_hook: "", metaphor: "" } },
+                        beats: result.filter((item: any) => item.beat_id !== undefined)
+                    } as MasterBeatSheet;
+                }
+            }
+
+            const beats = (result.beats && Array.isArray(result.beats)) ? result.beats : [];
+
+            // Validation: beats must not be empty
+            if (beats.length === 0) {
+                throw new Error(`[Agent2] Validation failed: beats array is empty.`);
+            }
+
+            beats.sort((a, b) => {
+                const numA = parseInt(a.beat_id.replace(/\D/g, '')) || 0;
+                const numB = parseInt(b.beat_id.replace(/\D/g, '')) || 0;
+                return numA - numB;
+            });
+
+            return {
+                visual_strategy: result.visual_strategy || { core_atmosphere: "", key_lens_design: { opening_hook: "", metaphor: "" } },
+                beats
+            };
+        } catch (e: any) {
+            console.error(`[Agent2][Retry ${attempt}/${MAX_RETRIES}] failed:`, e?.message || e);
+            if (attempt >= MAX_RETRIES) {
+                throw new Error(`[Agent2] Failed after ${MAX_RETRIES} retries: ${e?.message || e}`);
+            }
+            await wait(Math.pow(2, attempt) * 2000);
         }
     }
 
-    const beats = (result.beats && Array.isArray(result.beats)) ? result.beats : [];
-
-    beats.sort((a, b) => {
-        const numA = parseInt(a.beat_id.replace(/\D/g, '')) || 0;
-        const numB = parseInt(b.beat_id.replace(/\D/g, '')) || 0;
-        return numA - numB;
-    });
-
-    return {
-        visual_strategy: result.visual_strategy || { core_atmosphere: "", key_lens_design: { opening_hook: "", metaphor: "" } },
-        beats
-    };
+    // Unreachable, but satisfies TypeScript
+    throw new Error(`[Agent2] Exhausted all retries.`);
 };

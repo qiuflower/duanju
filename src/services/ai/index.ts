@@ -18,6 +18,7 @@ export {
     generatePromptsFromBeats,
     generateEpisodeScenes,
     generateAssetImage,
+    buildAssetPrompts,
     generateSceneImage,
     generateVideo,
     pollVideoUntilDone,

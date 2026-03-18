@@ -1,0 +1,42 @@
+{
+    "beats": [
+        {
+            "beat_id": "B001",
+            "beat_type": "SETUP",
+            "visual_action": "夜幕降临，古镇沉浸在连绵秋雨中。青石板路上积满水洼，映照着沿街老宅挂出的红灯笼，光影在雨中摇曳如梦幻。",
+            "camera": "Wide establishing shot, slow dolly forward",
+            "lens": "24mm Wide Angle",
+            "lighting": "Low-key, warm lantern glow vs cool rain",
+            "mood": "mysterious, atmospheric"
+        },
+        {
+            "beat_id": "B002",
+            "beat_type": "INTRODUCTION",
+            "visual_action": "苏小小撑着油纸伞踩着轻快的步子走在回家的路上，她一双灵动的大眼睛在夜色中格外明亮，水蓝色棉布裙摆被风微微吹起。",
+            "camera": "Medium shot, tracking",
+            "lens": "50mm Standard",
+            "lighting": "Soft side lighting from lanterns",
+            "mood": "youthful, lively"
+        },
+        {
+            "beat_id": "B003",
+            "beat_type": "DEVELOPMENT",
+            "visual_action": "林远冒雨追上苏小小，两人并肩走过雨中古镇，路过老槐树下的石桥时苏小小停住脚步。",
+            "camera": "Two-shot, slight low angle",
+            "lens": "35mm",
+            "lighting": "Natural rain ambiance",
+            "mood": "companionable, building tension"
+        },
+        {
+            "beat_id": "B004",
+            "beat_type": "CLIMAX",
+            "visual_action": "桥面突然剧烈晃动，石板发出咔嚓声。林远拉住苏小小飞奔而去，身后石桥轰然坍塌激起大片水花。",
+            "camera": "Handheld, dynamic tracking",
+            "lens": "28mm Wide",
+            "lighting": "Dramatic lightning flash",
+            "mood": "urgent, dangerous"
+        }
+    ],
+    "visual_strategy": "中国古镇水墨风格，暖色灯笼与冷色雨夜对比",
+    "newAssets": []
+}
