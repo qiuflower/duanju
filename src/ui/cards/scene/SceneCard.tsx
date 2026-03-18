@@ -156,4 +156,13 @@ const SceneCard: React.FC<SceneCardProps> = (props) => {
     );
 };
 
-export default SceneCard;
+export default React.memo(SceneCard, (prev, next) => {
+    return prev.scene === next.scene
+        && prev.isGeneratingExternal === next.isGeneratingExternal
+        && prev.areAssetsReady === next.areAssetsReady
+        && prev.videoAssetsReady === next.videoAssetsReady
+        && prev.flash === next.flash
+        && prev.assets === next.assets
+        && prev.globalStyle === next.globalStyle
+        && prev.language === next.language;
+});

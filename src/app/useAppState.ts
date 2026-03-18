@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { AnalysisStatus, Scene, Asset, GlobalStyle, NovelChunk } from '@/shared/types';
 import { generateSceneImage } from '@/services/ai';
+import { loadAssetBase64 } from '@/services/storage';
 import { translations, Translation } from '@/services/i18n/translations';
 import { STATE_KEY } from '@/shared/constants/defaults';
 import { useSessionRestore } from '@/features/useSessionRestore';
@@ -97,7 +98,20 @@ export function useAppState() {
     // ── Handlers ────────────────────────────────────
     const handleGenerateImageWrapper = async (scene: Scene, chunkAssets?: Asset[]) => {
         const assetsToUse = chunkAssets || displayedAssets;
-        const result = await generateSceneImage(scene, globalStyle, assetsToUse);
+        // Resolve blob: URLs to base64 before sending to backend (blob URLs are browser-only)
+        const resolvedAssets = await Promise.all(assetsToUse.map(async (a) => {
+            if (a.refImageUrl?.startsWith('blob:') && a.refImageAssetId) {
+                const base64 = await loadAssetBase64(a.refImageAssetId);
+                if (base64) {
+                    // Normalize MIME type — blobs from IndexedDB/ZIP may have application/octet-stream
+                    const fixed = base64.replace(/^data:[^;]+/, 'data:image/png');
+                    return { ...a, refImageUrl: fixed };
+                }
+                return a;
+            }
+            return a;
+        }));
+        const result = await generateSceneImage(scene, globalStyle, resolvedAssets);
         return result.imageUrl || result;
     };
 

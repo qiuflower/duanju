@@ -40,7 +40,7 @@ describe('mergeAssetsIntoGlobal', () => {
         expect(hasChanges).toBe(true);
     });
 
-    it('2. 已存在 — 更新 description, 无条件清除 refImageUrl', () => {
+    it('2. 已存在 — 更新 description, 保留已有 refImageUrl', () => {
         const global = [makeAsset({
             id: 'hero', description: '撑伞少女',
             refImageUrl: 'blob:xxx', refImageAssetId: 'db_123'
@@ -48,8 +48,8 @@ describe('mergeAssetsIntoGlobal', () => {
         const extracted = [makeAsset({ id: 'hero', description: '手持折扇的侠女' })];
         const { merged } = mergeAssetsIntoGlobal(global, extracted);
         expect(merged[0].description).toBe('手持折扇的侠女');  // 更新
-        expect(merged[0].refImageUrl).toBeUndefined();          // 清除!
-        expect(merged[0].refImageAssetId).toBeUndefined();      // 清除!
+        expect(merged[0].refImageUrl).toBe('blob:xxx');          // 保留!
+        expect(merged[0].refImageAssetId).toBe('db_123');        // 保留!
     });
 
     it('3. 混合 — 新增+更新同时处理', () => {

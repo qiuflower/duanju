@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Asset, GlobalStyle, NovelChunk, Scene } from '@/shared/types';
-import { saveState, loadState } from '@/services/storage';
+import { saveState, loadState, loadAssetUrl } from '@/services/storage';
 import { STATE_KEY, DEFAULT_STYLES } from '@/shared/constants/defaults';
 
 interface SessionState {
@@ -16,6 +16,36 @@ interface SessionState {
     setFilename: React.Dispatch<React.SetStateAction<string>>;
 }
 
+/** Re-resolve a blob: URL from IndexedDB, or keep non-blob URLs as-is */
+async function resolveUrl(url?: string, assetId?: string): Promise<string | undefined> {
+    // Non-blob URLs (data:, http:) are valid across sessions
+    if (url && !url.startsWith('blob:')) return url;
+    // Re-resolve from IndexedDB if we have an asset ID
+    if (assetId) {
+        const freshUrl = await loadAssetUrl(assetId);
+        if (freshUrl) return freshUrl;
+    }
+    return undefined;
+}
+
+/** Re-resolve all blob URLs in an asset */
+async function hydrateAsset(asset: Asset): Promise<Asset> {
+    const refImageUrl = await resolveUrl(asset.refImageUrl, asset.refImageAssetId);
+    if (refImageUrl === asset.refImageUrl) return asset;
+    return { ...asset, refImageUrl };
+}
+
+/** Re-resolve all blob URLs in a scene */
+async function hydrateScene(scene: Scene): Promise<Scene> {
+    const [imageUrl, videoUrl, startEndVideoUrl, narrationAudioUrl] = await Promise.all([
+        resolveUrl(scene.imageUrl, scene.imageAssetId),
+        resolveUrl(scene.videoUrl, scene.videoAssetId),
+        resolveUrl(scene.startEndVideoUrl, scene.startEndVideoAssetId),
+        resolveUrl(scene.narrationAudioUrl, undefined), // no separate assetId for audio
+    ]);
+    return { ...scene, imageUrl, videoUrl, startEndVideoUrl, narrationAudioUrl };
+}
+
 export function useSessionRestore(state: SessionState) {
     const [isRestored, setIsRestored] = useState(false);
     const { globalAssets, setGlobalAssets, chunks, setChunks, globalStyle, setGlobalStyle, language, setLanguage, filename, setFilename } = state;
@@ -27,32 +57,23 @@ export function useSessionRestore(state: SessionState) {
                 const savedState = await loadState(STATE_KEY);
                 if (savedState) {
                     if (savedState.globalAssets) {
-                        const cleanAssets = savedState.globalAssets.map((asset: Asset) => ({
-                            ...asset,
-                            refImageUrl: asset.refImageUrl?.startsWith('blob:') ? undefined : asset.refImageUrl
-                        }));
-                        setGlobalAssets(cleanAssets);
+                        const hydrated = await Promise.all(
+                            savedState.globalAssets.map((a: Asset) => hydrateAsset(a))
+                        );
+                        setGlobalAssets(hydrated);
                     }
                     if (savedState.chunks) {
-                        const hydratedChunks = savedState.chunks.map((chunk: NovelChunk) => ({
-                            ...chunk,
-                            assets: chunk.assets.map((asset: Asset) => ({
-                                ...asset,
-                                refImageUrl: asset.refImageUrl?.startsWith('blob:') ? undefined : asset.refImageUrl
-                            })),
-                            scenes: chunk.scenes.map((scene: Scene) => {
-                                let newVideoUrl = scene.videoUrl;
-                                let newImageUrl = scene.imageUrl;
-                                if (newVideoUrl?.startsWith('blob:')) newVideoUrl = undefined;
-                                if (newImageUrl?.startsWith('blob:')) newImageUrl = undefined;
-                                return {
-                                    ...scene,
-                                    videoUrl: newVideoUrl,
-                                    imageUrl: newImageUrl,
-                                    narrationAudioUrl: scene.narrationAudioUrl?.startsWith('blob:') ? undefined : scene.narrationAudioUrl
-                                };
-                            })
-                        }));
+                        const hydratedChunks = await Promise.all(
+                            savedState.chunks.map(async (chunk: NovelChunk) => ({
+                                ...chunk,
+                                assets: await Promise.all(
+                                    chunk.assets.map((a: Asset) => hydrateAsset(a))
+                                ),
+                                scenes: await Promise.all(
+                                    chunk.scenes.map((s: Scene) => hydrateScene(s))
+                                ),
+                            }))
+                        );
                         setChunks(hydratedChunks);
                     }
                     if (savedState.globalStyle) setGlobalStyle(savedState.globalStyle);
@@ -91,3 +112,4 @@ export function useSessionRestore(state: SessionState) {
 
     return { isRestored };
 }
+

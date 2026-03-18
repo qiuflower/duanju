@@ -3,6 +3,7 @@ import { NovelChunk, Asset, GlobalStyle, Scene } from '@/shared/types';
 import { generateVideo, pollVideoUntilDone } from '@/services/ai';
 import { loadAssetUrl } from '@/services/storage';
 import { extractAssetTags, resolveTagToAsset, isStoryboardTag } from '@/shared/asset-tags';
+import { matchAssetsToPrompt } from '@/services/ai/media/video';
 import JSZip from 'jszip';
 import { buildExportData } from '@/app/chunkUtils';
 import saveAs from 'file-saver';
@@ -171,7 +172,17 @@ export function useChunkActions({
             setGeneratingSceneIds(prev => [...prev, scene.id]);
             try {
                 const url = await onGenerateImage(scene, chunk.assets);
-                onSceneUpdate(chunk.id, scene.id, { imageUrl: url });
+                // Merge imageUrl + videoAssetIds into one update to avoid cascade re-renders
+                const updates: Partial<Scene> = { imageUrl: url };
+                if (scene.isStartEndFrameMode) {
+                    updates.startEndAssetIds = [`scene_img_${scene.id}`];
+                } else if (scene.videoAssetIds === undefined) {
+                    const currentSceneImgId = `scene_img_${scene.id}`;
+                    const availableAssets = chunk.assets.filter(a => (scene.assetIds || []).includes(a.id));
+                    const matched = matchAssetsToPrompt(scene.visual_desc || '', availableAssets, scene.assetIds || []);
+                    updates.videoAssetIds = [currentSceneImgId, ...matched.slice(0, 2).map(a => a.id)];
+                }
+                onSceneUpdate(chunk.id, scene.id, updates);
             } catch (e) {
                 console.error(`Failed to gen image for scene ${scene.id}`, e);
             } finally {
@@ -271,11 +282,29 @@ export function useChunkActions({
     };
 
     const handleImageGenerated = (sceneId: string, url: string) => {
-        onSceneUpdate(chunk.id, sceneId, { imageUrl: url });
+        const scene = chunk.scenes.find(s => s.id === sceneId);
+        // Merge imageUrl + videoAssetIds into one update to avoid cascade re-renders
+        const updates: Partial<Scene> = { imageUrl: url };
+        if (scene) {
+            if (scene.isStartEndFrameMode) {
+                updates.startEndAssetIds = [`scene_img_${sceneId}`];
+            } else if (scene.videoAssetIds === undefined) {
+                const currentSceneImgId = `scene_img_${sceneId}`;
+                const availableAssets = chunk.assets.filter(a => (scene.assetIds || []).includes(a.id));
+                const matched = matchAssetsToPrompt(scene.visual_desc || '', availableAssets, scene.assetIds || []);
+                updates.videoAssetIds = [currentSceneImgId, ...matched.slice(0, 2).map(a => a.id)];
+            }
+        }
+        onSceneUpdate(chunk.id, sceneId, updates);
     };
 
-    const handleGenerateImageInternal = (scene: Scene) => {
-        return onGenerateImage(scene, chunk.assets);
+    const handleGenerateImageInternal = async (scene: Scene) => {
+        setGeneratingSceneIds(prev => [...prev, scene.id]);
+        try {
+            return await onGenerateImage(scene, chunk.assets);
+        } finally {
+            setGeneratingSceneIds(prev => prev.filter(id => id !== scene.id));
+        }
     };
 
     const handleVideoGenerated = (sceneId: string, url: string, assetId?: string) => {
@@ -296,6 +325,18 @@ export function useChunkActions({
             zip.file("assets.txt", assetText);
 
             const chunkData = buildExportData(chunk);
+            // Strip stale blob: URLs from exported data (they are session-specific and won't work on import)
+            chunkData.assets = chunkData.assets.map((a: any) => ({
+                ...a,
+                refImageUrl: a.refImageUrl?.startsWith('blob:') ? undefined : a.refImageUrl,
+            }));
+            chunkData.scenes = chunkData.scenes.map((s: any) => ({
+                ...s,
+                imageUrl: s.imageUrl?.startsWith('blob:') ? undefined : s.imageUrl,
+                videoUrl: s.videoUrl?.startsWith('blob:') ? undefined : s.videoUrl,
+                startEndVideoUrl: s.startEndVideoUrl?.startsWith('blob:') ? undefined : s.startEndVideoUrl,
+                narrationAudioUrl: s.narrationAudioUrl?.startsWith('blob:') ? undefined : s.narrationAudioUrl,
+            }));
             zip.file("data.json", JSON.stringify(chunkData, null, 2));
 
             const imgFolder = zip.folder("images");
@@ -340,7 +381,7 @@ export function useChunkActions({
             for (const asset of chunk.assets) {
                 const assetBlob = await getBlob(asset.refImageUrl, asset.refImageAssetId);
                 if (assetBlob) {
-                    assetFolder?.file(`${asset.id}_${asset.name}.png`, assetBlob);
+                    assetFolder?.file(`${asset.id}.png`, assetBlob);
                 }
             }
 

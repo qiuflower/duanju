@@ -370,7 +370,9 @@ export function useChunkManager(deps: ChunkManagerDeps) {
             for (const asset of (importedData.assets || [])) {
                 let refImageUrl = asset.refImageUrl;
                 let refImageAssetId = asset.refImageAssetId;
-                const imgFile = zip.file(`asset_refs/${asset.id}_${asset.name}.png`);
+                // Try new safe filename first, then legacy format for backward compat
+                const imgFile = zip.file(`asset_refs/${asset.id}.png`)
+                    || zip.file(`asset_refs/${asset.id}_${asset.name}.png`);
                 if (imgFile) {
                     const blob = await imgFile.async("blob");
                     refImageAssetId = await saveAsset(blob);
