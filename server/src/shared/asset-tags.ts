@@ -1,12 +1,13 @@
 /**
  * Shared @图像 tag utilities — single source of truth for tag parsing & matching.
  *
- * Tag format:  @图像_显示名#asset_id   (ID anchor is optional for backwards compat)
- * Examples:    @图像_岑矜#hero_base     @图像_分镜S05     @图像_岑矜的卧室
+ * Tag format:  [@图像_显示名#asset_id]   (brackets provide unambiguous boundary)
+ * Legacy:      @图像_显示名#asset_id     (still supported without brackets)
+ * Examples:    [@图像_岑矜#hero_base]    [@图像_分镜S05]    @图像_岑矜的卧室
  */
 
-/** Unified regex: group 1 = display name, group 2 = optional #id anchor */
-export const ASSET_TAG_REGEX = /@图像_([^\s，。,.;；：:！!？?、）)｝}\]\[（(｛{@#]+)(?:#([a-zA-Z0-9_]+))?/g;
+/** Unified regex: optional leading [, group 1 = display name, group 2 = optional #id anchor */
+export const ASSET_TAG_REGEX = /\[?@图像_([^\s，。,.;；：:！!？?、）)｝}\]\[（(｛{@#]+)(?:#([a-zA-Z0-9_]+))?\]?/g;
 
 export interface ParsedTag {
     /** Full match text (e.g. "@图像_岑矜#hero_base") */
@@ -93,10 +94,10 @@ export function injectTagIds<T extends { name: string; id: string }>(
 ): string {
     if (!text) return text;
     return text.replace(ASSET_TAG_REGEX, (match, tagName: string, existingId: string) => {
-        if (isStoryboardTag(tagName)) return match;
-        if (existingId) return match; // Already has ID anchor
+        if (isStoryboardTag(tagName)) return match.startsWith('[') ? match : `[@图像_${tagName}]`;
+        if (existingId) return match.startsWith('[') ? match : `[@图像_${tagName}#${existingId}]`;
         const asset = bestMatchAsset(tagName, candidates);
-        return asset ? `@图像_${tagName}#${asset.id}` : match;
+        return asset ? `[@图像_${tagName}#${asset.id}]` : match;
     });
 }
 
@@ -109,4 +110,9 @@ export function stripAssetTags(text: string): string {
         .replace(ASSET_TAG_REGEX, '')
         .replace(/\s{2,}/g, ' ')
         .trim();
+}
+
+/** Wrap a tag in bracket format */
+export function bracketTag(name: string, id?: string): string {
+    return id ? `[@图像_${name}#${id}]` : `[@图像_${name}]`;
 }

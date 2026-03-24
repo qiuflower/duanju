@@ -12,7 +12,7 @@ dotenv.config({ path: path.join(__dirname, '../.env') });
 import pipelineRouter from './routes/pipeline';
 import mediaRouter from './routes/media';
 import styleRouter from './routes/style';
-import reviewRouter from './routes/review';
+
 import configRouter from './routes/config';
 
 const app = express();
@@ -56,7 +56,7 @@ app.use('/api/', (req, res, next) => {
 app.use('/api/pipeline', pipelineRouter);
 app.use('/api/media', mediaRouter);
 app.use('/api/style', styleRouter);
-app.use('/api/review', reviewRouter);
+
 app.use('/api/config', configRouter);
 
 // ===== LEGACY: Proxy Routes (kept for backward compatibility) =====
@@ -164,6 +164,5 @@ app.listen(PORT, () => {
     console.log('  POST /api/style/analyze-images');
     console.log('  POST /api/style/extract-assets-from-beats');
     console.log('  GET/POST /api/config');
-    console.log('  POST /api/review/video-prompt');
-    console.log('  POST /api/review/optimize');
+
 });

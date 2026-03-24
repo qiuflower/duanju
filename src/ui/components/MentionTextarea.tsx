@@ -128,8 +128,8 @@ const htmlToText = (el: HTMLDivElement): string => {
             if (elem.dataset.mention) {
                 const mentionId = elem.dataset.mentionId; // data-mention-id
                 result += mentionId
-                    ? `@图像_${elem.dataset.mention}#${mentionId}`
-                    : `@图像_${elem.dataset.mention}`;
+                    ? `[@图像_${elem.dataset.mention}#${mentionId}]`
+                    : `[@图像_${elem.dataset.mention}]`;
                 return; // don't recurse into chip children
             }
             // <br> → newline

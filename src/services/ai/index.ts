@@ -27,6 +27,4 @@ export {
     extractVisualDna,
     analyzeVisualStyleFromImages,
     extractAssetsFromBeats,
-    reviewVideoPrompt,
-    regenerateVideoPromptOptimized,
 } from '@/services/api';

@@ -239,13 +239,39 @@ export function useChunkActions({
     };
 
     const handleMakeFilm = async () => {
+        const hasVideo = (s: Scene) => s.isStartEndFrameMode
+            ? (!!s.startEndVideoUrl || !!s.startEndVideoAssetId)
+            : (!!s.videoUrl || !!s.videoAssetId);
+        const hasImage = (s: Scene) => !!s.imageUrl || !!s.imageAssetId;
+
+        const allEligible = chunk.scenes.filter(s => hasImage(s));
+        const scenesWithoutVideo = allEligible.filter(s => !hasVideo(s));
+        const scenesWithVideo = allEligible.filter(s => hasVideo(s));
+
+        if (allEligible.length === 0) return;
+
+        let scenesToProcess: Scene[];
+        if (scenesWithoutVideo.length === allEligible.length) {
+            // Case 1: No videos at all → generate all directly
+            scenesToProcess = scenesWithoutVideo;
+        } else if (scenesWithoutVideo.length > 0) {
+            // Case 2: Partial videos → confirm, generate only missing
+            const confirmMsg = language === 'Chinese'
+                ? `${scenesWithVideo.length}/${allEligible.length} 个分镜已有视频。\n\n点击「确定」仅生成缺失的 ${scenesWithoutVideo.length} 个视频。\n点击「取消」不执行操作。`
+                : `${scenesWithVideo.length}/${allEligible.length} scenes already have videos.\n\nClick OK to generate the ${scenesWithoutVideo.length} missing videos.\nClick Cancel to abort.`;
+            if (!window.confirm(confirmMsg)) return;
+            scenesToProcess = scenesWithoutVideo;
+        } else {
+            // Case 3: All scenes already have videos → ask to regenerate
+            const confirmMsg = language === 'Chinese'
+                ? `所有 ${allEligible.length} 个分镜已有视频，是否重新生成全部？`
+                : `All ${allEligible.length} scenes already have videos. Regenerate all?`;
+            if (!window.confirm(confirmMsg)) return;
+            scenesToProcess = allEligible;
+        }
+
+        if (scenesToProcess.length === 0) return;
         setLoadingStep('filming');
-        const scenesToProcess = chunk.scenes.filter(s => {
-            if (s.isStartEndFrameMode) {
-                return (s.imageUrl || s.imageAssetId) && !s.startEndVideoUrl && !s.startEndVideoAssetId;
-            }
-            return (s.imageUrl || s.imageAssetId) && !s.videoUrl && !s.videoAssetId;
-        });
 
         const MAX_RETRIES = 5;
         const CONCURRENCY = 3;

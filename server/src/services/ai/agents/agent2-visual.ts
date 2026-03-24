@@ -1,5 +1,5 @@
 import { GenerateContentResponse } from "../../../shared/types";
-import { PROMPTS } from "../../../domain/generation/prompts";
+import { PROMPTS } from "../../../domain/generation/prompt";
 import { retryWithBackoff, safeJsonParse, wait, Type, ai } from "../helpers";
 import { MODELS } from "../model-manager";
 import { NarrativeBlueprint, MasterBeatSheet } from "./types";

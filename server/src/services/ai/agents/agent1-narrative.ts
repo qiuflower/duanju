@@ -1,10 +1,10 @@
 import { GenerateContentResponse } from "../../../shared/types";
-import { PROMPTS } from "../../../domain/generation/prompts";
+import { PROMPTS } from "../../../domain/generation/prompt";
 import { retryWithBackoff, safeJsonParse, wait, Type, ai } from "../helpers";
 import { MODELS } from "../model-manager";
 import { NarrativeBlueprint } from "./types";
 
-// --- AGENT 1: NARRATIVE ARCHITECT ---, photorealistic, cinematic lighting, unreal engine 5 render, volumetric fog, octane render --ar ${aspectRatio} --v 6.0 [特征精细保持] [光影一致性]
+// --- AGENT 1: NARRATIVE ARCHITECT ---
 
 export const runAgent1_NarrativeAnalysis = async (
     text: string,
@@ -85,16 +85,16 @@ export const runAgent1_NarrativeAnalysis = async (
             batchContext += `\n\n[Previous Batch Summary]: Ended at Episode ${lastEp.episode_number}. \nLast Episode Script Ending: "${(lastEp.script || '').slice(-200)}". \n\n**INSTRUCTION**: You MUST start Episode ${lastEp.episode_number + 1} by resolving or escalating the cliffhanger from the previous episode. Maintain seamless narrative continuity. Do NOT restart the story.`;
         }
 
-        const sysPrompt = PROMPTS.AGENT_1_NARRATIVE(
-            episodeInstruction,
+        const sysPrompt = PROMPTS.AGENT_1_NARRATIVE({
+            batchInstruction: episodeInstruction,
             language,
             text,
-            batchContext,
-            isSplitMode,
+            prevContext: batchContext,
+            isBatched: isSplitMode,
             episodeRange,
             currentBatchNum,
             totalBatches
-        );
+        });
 
         const narrativeSchema = {
             type: Type.OBJECT,
@@ -159,7 +159,7 @@ export const runAgent1_NarrativeAnalysis = async (
                     }
                 }), 3, 5000);
 
-                console.log(`[Agent1] Batch ${currentBatchNum}/${totalBatches} raw response:`, response.text);
+                console.debug(`[Agent1] Batch ${currentBatchNum}/${totalBatches} raw response received (${(response.text || '').length} chars)`);
 
                 let result = safeJsonParse<NarrativeBlueprint>(response.text, {
                     batch_meta: { narrative_state: { current_tension: "Low", open_loops: [] } },

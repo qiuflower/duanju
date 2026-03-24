@@ -37,15 +37,9 @@ export interface Scene {
   useAssets?: boolean; // Whether to use assets for video generation
   isStartEndFrameMode?: boolean; // Whether to use Start/End Frame Mode (veo3.1-pro-4k)
   video_prompt_backup?: string; // Backup of video prompt for Start/End Frame Mode undo
-  visualReview?: VisualReviewResult; // New: Agent Visual Review Result
 }
 
-export interface VisualReviewResult {
-  passed: boolean;
-  dimensions: { name: string; score: number; comment: string }[];
-  risks: string[];
-  suggestions: string[];
-}
+
 
 export interface GeneratedImage {
   sceneId: string;

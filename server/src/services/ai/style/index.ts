@@ -1,5 +1,5 @@
 import { Asset, GenerateContentResponse } from "../../../shared/types";
-import { PROMPTS } from "../../../domain/generation/prompts";
+import { PROMPTS } from "../../../domain/generation/prompt";
 import { retryWithBackoff, safeJsonParse, Type, ai } from "../helpers";
 import { MODELS } from "../model-manager";
 

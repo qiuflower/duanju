@@ -30,15 +30,9 @@ export interface Scene {
     useAssets?: boolean;
     isStartEndFrameMode?: boolean;
     video_prompt_backup?: string;
-    visualReview?: VisualReviewResult;
 }
 
-export interface VisualReviewResult {
-    passed: boolean;
-    dimensions: { name: string; score: number; comment: string }[];
-    risks: string[];
-    suggestions: string[];
-}
+
 
 export interface GeneratedImage {
     sceneId: string;

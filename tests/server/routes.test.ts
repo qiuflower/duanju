@@ -35,10 +35,7 @@ vi.mock('../../server/src/services/ai/style/index', () => ({
     extractAssetsFromBeats: vi.fn().mockResolvedValue([]),
 }));
 
-vi.mock('../../server/src/services/ai/review/index', () => ({
-    reviewVideoPrompt: vi.fn().mockResolvedValue({ score: 8, feedback: [] }),
-    regenerateVideoPromptOptimized: vi.fn().mockResolvedValue({ videoPrompt: 'optimized' }),
-}));
+
 
 vi.mock('../../server/src/services/ai/model-manager', () => ({
     getModelManager: vi.fn().mockReturnValue({
@@ -51,7 +48,7 @@ vi.mock('../../server/src/services/ai/model-manager', () => ({
 import pipelineRouter from '../../server/src/routes/pipeline';
 import mediaRouter from '../../server/src/routes/media';
 import styleRouter from '../../server/src/routes/style';
-import reviewRouter from '../../server/src/routes/review';
+
 import configRouter from '../../server/src/routes/config';
 
 // ─── Build test Express app ───
@@ -60,7 +57,7 @@ app.use(express.json({ limit: '50mb' }));
 app.use('/api/pipeline', pipelineRouter);
 app.use('/api/media', mediaRouter);
 app.use('/api/style', styleRouter);
-app.use('/api/review', reviewRouter);
+
 app.use('/api/config', configRouter);
 
 // ════════════════════════════════════════════
@@ -177,19 +174,7 @@ describe('Style Routes', () => {
     });
 });
 
-// ════════════════════════════════════════════
-// Review Routes
-// ════════════════════════════════════════════
-describe('Review Routes', () => {
-    describe('POST /api/review/video-prompt', () => {
-        it('400 when prompt missing', async () => { expect((await request(app).post('/api/review/video-prompt').send({ language: 'zh' })).status).toBe(400); });
-        it('200 with valid request', async () => { expect((await request(app).post('/api/review/video-prompt').send({ prompt: 'test', language: 'zh' })).status).toBe(200); });
-    });
-    describe('POST /api/review/optimize', () => {
-        it('400 when scene missing', async () => { expect((await request(app).post('/api/review/optimize').send({ language: 'zh' })).status).toBe(400); });
-        it('200 with valid request', async () => { expect((await request(app).post('/api/review/optimize').send({ scene: { id: 's1' }, language: 'zh' })).status).toBe(200); });
-    });
-});
+
 
 // ════════════════════════════════════════════
 // Config Routes

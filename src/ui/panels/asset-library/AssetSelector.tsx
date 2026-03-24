@@ -68,7 +68,11 @@ export const AssetSelector: React.FC<AssetSelectorProps> = ({
     const handleConfirmSelection = () => {
         const selectedArr = Array.from(multiSelection);
         const selectedAssets = [...extraAssets, ...assets, ...sceneImages].filter(a => selectedArr.includes(a.id));
-        onSelect(selectedArr, selectedAssets);
+        if (onConfirm) {
+            onConfirm(selectedArr);
+        } else {
+            onSelect(selectedArr, selectedAssets);
+        }
     };
 
     const handleUpload = (e: React.ChangeEvent<HTMLInputElement>) => {

@@ -97,7 +97,7 @@ export function useSceneAssets(props: UseSceneAssetsProps) {
         const asset = allAssets.find(a => a.id === assetId);
         if (!asset) return prompt;
         // Allow duplicate tags — dedup happens downstream in video.ts/agent3-asset.ts
-        const tag = `@图像_${asset.name}#${asset.id}`;
+        const tag = `[@图像_${asset.name}#${asset.id}]`;
         return prompt ? `${prompt} ${tag}` : tag;
     };
 

@@ -221,26 +221,7 @@ export const extractAssetsFromBeats = async (
     return result.assets;
 };
 
-// =================== REVIEW =====================
 
-/** Review a video prompt */
-export const reviewVideoPrompt = async (
-    prompt: string,
-    language: string
-): Promise<any> => {
-    return post('/review/video-prompt', { prompt, language });
-};
-
-/** Optimize a video prompt after review */
-export const regenerateVideoPromptOptimized = async (
-    scene: Scene,
-    assets: Asset[] = [],
-    stylePrefix: string = '',
-    language: string = '',
-    reviewResult?: any
-): Promise<any> => {
-    return post('/review/optimize', { scene, assets, stylePrefix, language, reviewResult });
-};
 
 // =================== CONFIG =====================
 

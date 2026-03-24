@@ -1,5 +1,5 @@
 import { Scene, Asset, GenerateContentResponse } from "../../../shared/types";
-import { PROMPTS } from "../../../domain/generation/prompts";
+import { PROMPTS } from "../../../domain/generation/prompt";
 import { toDetailedLensLibrary } from "../../../domain/generation/core-lenses";
 import { retryWithBackoff, safeJsonParse, wait, Type, ai } from "../helpers";
 import { MODELS } from "../model-manager";
@@ -16,7 +16,7 @@ export const runAgent3_AssetProduction = async (
     aspectRatio: string = '16:9',
     onProgress?: (msg: string) => void
 ): Promise<Scene[]> => {
-    const assetMap = assets.map(a => `@图像_${a.name}#${a.id} → DNA: ${a.visualDna || ''}, Desc: ${a.description}`).join('\n');
+    const assetMap = assets.map(a => `[@图像_${a.name}#${a.id}] → DNA: ${a.visualDna || ''}, Desc: ${a.description}`).join('\n');
 
     const usedShotIds = [...new Set((beatSheet.beats || []).map(b => b.shot_id).filter(Boolean))];
     const filteredLensLibrary = toDetailedLensLibrary(usedShotIds);
@@ -92,7 +92,7 @@ export const runAgent3_AssetProduction = async (
 
         const prevBatchLastBeatId = i > 0 ? clampedBeats[start - 1]?.beat_id : null;
         const continuityHint = prevBatchEndContext && prevBatchLastBeatId
-            ? `\n⚠️ 衔接锚点: 上一个片段结束镜头为 @图像_分镜${prevBatchLastBeatId}，画面内容: "${prevBatchEndContext}"\n本批次第一个 beat（${batchBeats[0]?.beat_id || 'S??'}）的 video_prompt 0-2秒 必须引用 @图像_分镜${prevBatchLastBeatId} 作为首帧衔接锚点，从该画面自然过渡，禁止跳切。\n\n`
+            ? `\n⚠️ 衔接锚点: 上一个片段结束镜头为 [@图像_分镜${prevBatchLastBeatId}]，画面内容: "${prevBatchEndContext}"\n本批次第一个 beat（${batchBeats[0]?.beat_id || 'S??'}）的 video_prompt 0-2秒 必须引用 [@图像_分镜${prevBatchLastBeatId}] 作为首帧衔接锚点，从该画面自然过渡，禁止跳切。\n\n`
             : '';
 
         for (let attempt = 1; attempt <= MAX_BATCH_RETRIES; attempt++) {
