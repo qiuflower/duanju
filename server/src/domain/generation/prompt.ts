@@ -55,7 +55,7 @@ interface PromptFunctions {
   AGENT_A2_FROM_BEATS: (language: string, existingAssets: Asset[], workStyle?: string, useOriginalCharacters?: boolean) => string;
   VISUAL_DNA_FROM_IMAGES: (language: string) => string;
   AGENT_1_NARRATIVE: (config: Agent1NarrativeConfig) => string;
-  AGENT_2_VISUAL: (language: string, lensLibraryPrompt: string, originalScript?: string) => string;
+  AGENT_2_ANNOTATE: (language: string, lensLibraryPrompt: string, segmentCount: number) => string;
   AGENT_3_ASSET_PRODUCER: (fullLensLibrary: string, language: string, stylePrefix: string, assetMap: string, aspectRatio?: string) => string;
 }
 
@@ -146,7 +146,7 @@ You are **Agent A2: 美术组组长 (Asset Supervisor)**。
 4. **description 规则** (**必须用 ${language} 书写**):
 ${ASSET_DESCRIPTION_RULES}
 5. **不要遗漏**: 宁可多提取一个不太重要的道具，也不要漏掉拍摄时需要的资产。
-6. **整镜头阅读 (Full-Shot Reading)**: 提取资产时必须阅读每个 beat 的**全部字段**（visual_action, camera_movement, lighting, audio_subtext），不能只扫描角色名和场景名。beat 中提到的**环境细节、道具、特效**都可能是需要独立提取的资产。
+6. **整镜头阅读 (Full-Shot Reading)**: 提取资产时必须阅读每个 beat 的**全部字段**（尤其是 \`visual_action\`）。**极度重要：** \`visual_action\` 开头通常会带有【第X场 xxx】等**场景元信息**，你必须将其精准提取为 \`location\` 类型的资产！同时 beat 中提到的环境细节、道具、特效等也必须独立提取。
 7. **description 必须完整自包含**: 每个资产的 description 必须足够详细，让图像生成模型**仅凭 description 就能独立还原**该资产的视觉形象，禁止写一两个词的简略描述。
 ${originalCharInstruction}
 
@@ -179,13 +179,23 @@ System Prompt: Agent 1 - 叙事架构师 (The Narrative Architect)
 
 2. Core Protocols (核心协议)
 - 极致提纯 (Distillation): 严格执行【${batchInstruction}】。无情切除90%铺垫与风景描写，只留核心欲望、冲突、权力与复仇。
-- 钩子与节奏 (Hooks & Pacing): 允许重组时间线前置高潮。每集必须严格遵循以下心流：Hook (0-15s, 极值开场/视觉冲击) -> 激化冲突 -> 至少2次反转 (Twists) -> 视觉奇观预留 (Spectacle) -> Cliffhanger (最后10秒，情绪最高点掐断)。
+- 节奏大纲先行 (Structural CoT): 为保证剧情密度，在输出剧本前必须先在 pacing_structure 字段梳理本集的结构：开场钩子 (Hook) -> 冲突点 (Inciting Incident) -> 至少2次反转 (Twists) -> 悬念断章 (Cliffhanger) 才能有效维持短剧节奏。
+- 剧情心流: 允许重组时间线前置高潮。每集开头15秒必须是极值开场/视觉冲击，最后10秒必须在情绪最高点掐断。
 
-3. Script Formatting (⚠️ 剧本输出硬性要求)
+3. Script Formatting (⚠️ 剧本排版与写法要求)
 - 语言: 必须使用 ${language}。
-- 完整性: **绝对拒绝缩写！禁止使用省略号"……"概括剧情！** 必须输出每一个关键动作、每一句对话、微表情及场景转换。
-- 字数: 每集必须达到 **3000-5000字**，低于3000字视为失败。
-- 排版: 必须包含场景标头【】、角色名、动作（括号内）、台词。用段落分隔符标注节奏（如 --- HOOK (0-15s) ---, --- CLIMAX ---）。
+- 完整性: **绝对拒绝缩写！禁止使用省略号"……"概括剧情！** 必须写出每一个关键动作、每一句对话、微表情及场景转换。
+- 字数: 剧本文本 (script字段) 每集必须达到 **3000-5000字**，低于3000字视为失败。
+- 排版标准(极度重要): 必须采用严格的中文影视剧本格式（纯净无节奏标签），规则如下：
+  1. 场景标头：格式为："第X场 内景/外景 场景地 — 日/夜"
+  2. 环境与动作：另起一段，尽量用全角括号（）包裹
+  3. 角色与台词：角色名单独一行，对应台词单独一行；表情/语气用括号紧跟角色名下方。
+  格式示例：
+  第1场 外景 悬崖边 — 黄昏
+  （夕阳如血，狂风猎猎。李明站在崖边，双拳紧握。）
+  李明
+  （压抑、低沉）
+  "你以为……你杀得了我吗？"
 
 Input Text:
 "${text}"
@@ -214,7 +224,13 @@ ${isBatched ? `**Batch Context**: Currently generating ${episodeRange}.` : ""}
       "episode_number": 1, 
       "title": "[高燃/悬疑标题]",
       "logline": "一句话概括本集核心冲突",
-      "script": "--- HOOK (0-15s) ---\n【场景：地点·时间】\n角色甲：（动作/表情）\"完整台词\"\n\n--- INCITING INCIDENT ---\n（环境描述与动作）\n\n--- TWIST ---\n...（展开完整剧情，满足3000字要求）...\n\n--- CLIFFHANGER ---\n角色乙：（惊恐）\"怎么会是你？！\"\n【黑屏】",
+      "pacing_structure": {
+        "hook": "[0-15s 悬念/冲突点设计：一秒抓人眼球]",
+        "inciting_incident": "[推动本集剧情的核心事件]",
+        "twists": ["[第一个反转]", "[第二个反转]"],
+        "cliffhanger": "[最后10秒情绪最高点的断章设计]"
+      },
+      "script": "【范例，务必纯净无标签排版】\n第1场 外景 悬崖边 — 黄昏\n\n（狂风呼啸，碎石落入深渊。）\n\n角色甲\n（动作/表情）\n\"完整台词\"\n\n（更多动作与环境调度...）\n\n第2场 内景 密室 — 夜\n...",
       "character_instructions": {
         "CHAR_ID_A": "[本集心理状态]"
       },
@@ -224,49 +240,66 @@ ${isBatched ? `**Batch Context**: Currently generating ${episodeRange}.` : ""}
 }
 `,
 
-  // --- AGENT 2: VISUAL DIRECTOR ---
-  AGENT_2_VISUAL: (language: string, lensLibraryPrompt: string, originalScript: string = "") => `
+  // --- AGENT 2: ANNOTATE MODE (标注模式) ---
+  AGENT_2_ANNOTATE: (language: string, lensLibraryPrompt: string, segmentCount: number) => `
 
-1. Role & Core Constraint (角色与绝对铁律)
-你是短剧视觉总监，负责将叙事蓝图转化为完整的 Beat (分镜) 脚本。
-⚠️ 绝对铁律：你必须严格调用【核心镜头组 (Core Lens Set)】 (ID 001-400)。严禁幻觉/编造不存在的 ID！必须精准映射叙事意图。
+1. Role (角色)
+你是分镜标注师。你将收到已拆分好的 ${segmentCount} 个剧本片段。
+每个片段已预编号 [Sxx]，你的任务是为每个片段标注最佳镜头语言。
 
-Lens Library:
+⚠️ 绝对铁律 (ABSOLUTE RULES):
+1. **数量守恒**: 输入 ${segmentCount} 个片段 → 必须输出恰好 ${segmentCount} 个 beats。禁止合并、删除或拆分任何片段！少一个或多一个都是失败！
+2. **原文 1:1 复刻与场景绑定**: 
+   - 每个 beat 的 \`visual_action\` 必须**完整包含**对应片段的原文。
+   - **⚠️ 极度重要：** 你必须将片段输入中带有的 \`[场景: xxxx]\` 信息，**原封不动地写入 \`visual_action\` 的开头**！这是后续 Agent 提取场景资产和绘制画面的**唯一时空依据**，若丢失场景信息，生成的视频将完全不匹配！
+   ✅ 正确: visual_action = "【场景: 第1场 内景 卧室 - 夜】原文全文 + 补充: 烛光映出墙上的剑影"
+   ✗ 错误: visual_action = "角色对话后做出决定"（概括且未带场景！）
+   ✗ 错误: visual_action = "原文全文"（只复制了语言，漏写了场景！）
+3. **ID 严格对应**: beat_id 必须与片段编号一一匹配 (片段 [S01] → beat_id: "S01", [S02] → "S02", ...)
+4. **镜头选择**: 从核心镜头库 (ID 001-400) 中选择最匹配的 shot_id，禁止编造不存在的 ID
+
+2. Lens Library (核心镜头组)
 ${lensLibraryPrompt}
 
-2. Core Protocols (核心协议)
-        - ⚠️ **Beat 数量由剧本内容决定**: 根据剧本的实际内容量生成足够数量的 beat，确保剧本中的**每一句台词、每一个动作、每一个场景**都被完整覆盖。不设固定上下限，内容多就多拆，内容少就少拆。
-        - 每个分镜必须包含 \`duration\`（如"8s"，范围4-15s）和 \`visual_action\`。
-        - \`visual_action\` 必须是该分镜的**完整剧本描述**（不少于80字），包含：完整角色动作链、场景环境细节、因果逻辑。
-        - 动作描述必须具体可执行，使用物理动词（推、拉、转、摇等），禁止心理活动和抽象概念。
-        - 确保分镜之间有起承转合，构成完整故事闭环。
-        - 动静结合：高速剪辑之后，必须接一个极静的定格。
-        - 连贯性守则：相邻 beat 至少共享 1 个视觉元素，动作必须有延续。
+3. 标注要求
+对每个片段，你需要标注：
+- **shot_id**: 最匹配的镜头 ID (001-400)
+- **shot_name**: 镜头英文名称
+- **camera_movement**: 运镜方式 (Static/Pan/Push in/Pull out/Dolly/Tracking/Crane/Handheld/Whip Pan/Steadicam)
+- **lighting**: 光影设计 (如 Rim Light/Neon/Natural/Low-key/High-key/Chiaroscuro/Golden Hour)
+- **audio_subtext**: 音效或环境音 (如 "SFX: 剑鸣声", "AMB: 雨声")
+- **narrative_function**: Setup | Tension | Twist | Climax | Resolution | Cliffhanger
+- **cause_from**: 首个填 "HOOK"，其余必须填直接前驱 beat_id
+- **emotional_intensity**: 1-10 的情感张力值
+- **duration**: 时长 ("4s"-"15s")，对话多用 10-15s，动作用 4-15s，定场用 6-15s
 
-Input Script / Novel Text:
----
-"${originalScript}"
----
+4. 镜头选择策略
+- scene_header (定场) → 优先大远景/远景 (001-010)
+- dialogue (对话) → 优先 OTS/双人镜头/正反打 (081-100)
+- action (动作) → 根据动作类型选：追逐用 Tracking (041-060)，打斗用 Handheld/Whip (201-240)
+- 相邻 beat 禁止使用相同 shot_id，确保视觉节奏感
+- 每 5 个 beat 至少使用 1 个高级镜头 (ID > 080)
 
-3. Output JSON Schema
-**CRITICAL RULE**: Output exactly ONE valid JSON object in ${language}. Do not wrap in arrays.
+5. Output JSON Schema
+**CRITICAL RULE**: Output exactly ONE valid JSON object in ${language}.
 {
   "visual_strategy": {
-    "core_atmosphere": "[核心氛围描述，如：高反差赛博朋克]",
-    "key_lens_design": { "opening_hook": "[起幅镜头策略]", "metaphor": "[奇观/隐喻策略]" }
+    "core_atmosphere": "[核心氛围]",
+    "key_lens_design": { "opening_hook": "[起幅策略]", "metaphor": "[隐喻策略]" }
   },
   "beats": [
     {
       "beat_id": "S01",
-      "shot_id": "001", 
-      "shot_name": "Extreme Close-Up",
-      "visual_action": "该 beat 的完整剧本描述（≥80字中文），包含动作、环境、因果逻辑",
-      "camera_movement": "[运镜，如 Static/Pan/Push in]",
-      "lighting": "[光影，如 Rim Light/Neon]",
-      "audio_subtext": "[音效或潜台词，如 SFX: 沉重心跳声]",
-      "narrative_function": "Setup | Tension | Twist | Climax | Resolution | Cliffhanger",
-      "cause_from": "HOOK", // 首个填 HOOK，其余填前驱 beat_id (如 S01)
-      "emotional_intensity": 7 // 1-10 情感张力值
+      "shot_id": "001",
+      "shot_name": "Establishing Shot",
+      "visual_action": "== 片段原文内容（可补充视觉细节但不可删减）==",
+      "camera_movement": "Slow Pan",
+      "lighting": "Golden Hour",
+      "audio_subtext": "AMB: 远处马蹄声",
+      "narrative_function": "Setup",
+      "cause_from": "HOOK",
+      "emotional_intensity": 5,
+      "duration": "8s"
     }
   ]
 }
@@ -286,7 +319,8 @@ ${fullLensLibrary}
 - **@图像 标签必须用方括号 [] 包裹！** 方括号提供明确的边界，系统依赖它来正确解析。
 - **资产引用格式**: [@图像_显示名#资产ID]。✅ [@图像_岑矜#hero_base]  ✗ @图像_岑矜（缺少[]和#id）
 - **分镜引用格式**: [@图像_分镜Sxx]（无需 #id）。✅ [@图像_分镜S06]  ✗ 分镜S06（缺少[@图像_]前缀）
-- 每个 beat 列出出场角色/场景 → 按重要性取前3个写入 video_prompt，用 [@图像] 标签自然融入句中。
+- **场景强制挂载 (CRITICAL)**: 视频和图片绝对不能在真空中发生！无论景别多近（即便是大特写），video_prompt 和 np_prompt 的文本序列中**必须包含当前【环境位置】的时空描述或其 [@图像_场景名#id] 标签**，绝不允许出现“只提人脸、背景不明”的废片！
+- 每个 beat 列出出场角色与场景 → 优先将“场景环境”搭配 1-2 个核心角色写入 prompt。
 
 
 3. Video Prompt Logic — Seedance 2.0 专业提示词规范
@@ -310,7 +344,7 @@ ${fullLensLibrary}
 每个时间段必须明确 5 要素：
 1️⃣ 画面主体（谁/什么物体）
 2️⃣ 具体物理动作（用物理动词：推、拉、转、撞、握、甩）
-3️⃣ 环境/场景状态（光线、天气、空间细节）
+3️⃣ 环境/场景状态（⚠️极其重要：即使是特写也绝不能留白！必须通过带有地貌的详细文字或 [@图像_xxx] 说明人物背后到底在哪里）
 4️⃣ 运镜变化（景别术语：大远景/远景/全景/中景/近景/特写/大特写 + 运镜：推/拉/摇/移/跟拍/环绕/手持/希区柯克变焦）
 5️⃣ 光影/材质细节（丁达尔效应、霓虹灯光、侧逆光、体积光等）
 

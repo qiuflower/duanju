@@ -20,7 +20,7 @@ export const runAgent1_NarrativeAnalysis = async (
 
     let batches: { start: number, end: number }[] = [{ start: 1, end: -1 }];
     let isSplitMode = false;
-    const MAX_EPISODES_PER_BATCH = 1;
+    const MAX_EPISODES_PER_BATCH = 3;
 
     if (episodeCount && episodeCount > 0) {
         if (episodeCount > MAX_EPISODES_PER_BATCH) {
@@ -128,6 +128,16 @@ export const runAgent1_NarrativeAnalysis = async (
                             episode_number: { type: Type.NUMBER },
                             title: { type: Type.STRING },
                             logline: { type: Type.STRING },
+                            pacing_structure: {
+                                type: Type.OBJECT,
+                                properties: {
+                                    hook: { type: Type.STRING },
+                                    inciting_incident: { type: Type.STRING },
+                                    twists: { type: Type.ARRAY, items: { type: Type.STRING } },
+                                    cliffhanger: { type: Type.STRING }
+                                },
+                                required: ["hook", "twists", "cliffhanger"]
+                            },
                             script: { type: Type.STRING },
                             character_instructions: { type: Type.OBJECT },
                             mentioned_chapters: { type: Type.ARRAY, items: { type: Type.STRING } }

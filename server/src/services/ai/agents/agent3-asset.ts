@@ -18,7 +18,7 @@ export const runAgent3_AssetProduction = async (
 ): Promise<Scene[]> => {
     const assetMap = assets.map(a => `[@图像_${a.name}#${a.id}] → DNA: ${a.visualDna || ''}, Desc: ${a.description}`).join('\n');
 
-    const usedShotIds = [...new Set((beatSheet.beats || []).map(b => b.shot_id).filter(Boolean))];
+    const usedShotIds = [...new Set((beatSheet.beats || []).map(b => b.shot_id).filter(Boolean))] as string[];
     const filteredLensLibrary = toDetailedLensLibrary(usedShotIds);
 
     const sysPrompt = PROMPTS.AGENT_3_ASSET_PRODUCER(filteredLensLibrary, language, stylePrefix, assetMap, aspectRatio);
@@ -26,15 +26,10 @@ export const runAgent3_AssetProduction = async (
     const allBeats = beatSheet.beats || [];
     if (allBeats.length === 0) return [];
 
-    const MIN_TOTAL_BEATS = 25;
-    const MAX_TOTAL_BEATS = 32;
-    const FIXED_BATCH_COUNT = 4;
-    const clampedBeats = allBeats.slice(0, MAX_TOTAL_BEATS);
-    if (clampedBeats.length < MIN_TOTAL_BEATS) {
-        // Below minimum beats threshold — proceed silently with available beats
-    }
-    const totalBeats = clampedBeats.length;
-    const batchCount = FIXED_BATCH_COUNT;
+    // 动态批处理：按 beat 数量自适应分批，每批最多 MAX_BEATS_PER_BATCH 个
+    const MAX_BEATS_PER_BATCH = 10;
+    const totalBeats = allBeats.length;
+    const batchCount = Math.max(1, Math.ceil(totalBeats / MAX_BEATS_PER_BATCH));
     const batchSize = Math.ceil(totalBeats / batchCount);
 
     let allScenes: Scene[] = [];
@@ -45,7 +40,7 @@ export const runAgent3_AssetProduction = async (
         const end = Math.min(start + batchSize, totalBeats);
         if (start >= totalBeats) break;
 
-        const batchBeats = clampedBeats.slice(start, end);
+        const batchBeats = allBeats.slice(start, end);
         const beatsStr = JSON.stringify(batchBeats);
 
         const agent3Schema = {
@@ -90,7 +85,7 @@ export const runAgent3_AssetProduction = async (
         const MAX_BATCH_RETRIES = 3;
         let batchSuccess = false;
 
-        const prevBatchLastBeatId = i > 0 ? clampedBeats[start - 1]?.beat_id : null;
+        const prevBatchLastBeatId = i > 0 ? allBeats[start - 1]?.beat_id : null;
         const continuityHint = prevBatchEndContext && prevBatchLastBeatId
             ? `\n⚠️ 衔接锚点: 上一个片段结束镜头为 [@图像_分镜${prevBatchLastBeatId}]，画面内容: "${prevBatchEndContext}"\n本批次第一个 beat（${batchBeats[0]?.beat_id || 'S??'}）的 video_prompt 0-2秒 必须引用 [@图像_分镜${prevBatchLastBeatId}] 作为首帧衔接锚点，从该画面自然过渡，禁止跳切。\n\n`
             : '';
@@ -170,7 +165,13 @@ export const runAgent3_AssetProduction = async (
 
                 if (validatedScenes.length > 0) {
                     const lastScene = validatedScenes[validatedScenes.length - 1];
-                    prevBatchEndContext = (lastScene.visual_desc || '') + ' | ' + (lastScene.video_prompt || '').slice(-100);
+                    // 结构化上下文：含运镜、音效，提升跨批次连贯性
+                    prevBatchEndContext = [
+                        lastScene.visual_desc || '',
+                        `video_prompt 尾段: ${(lastScene.video_prompt || '').slice(-200)}`,
+                        lastScene.video_camera ? `运镜: ${lastScene.video_camera}` : '',
+                        lastScene.audio_sfx ? `音效: ${lastScene.audio_sfx}` : ''
+                    ].filter(Boolean).join(' | ');
                 }
 
                 batchSuccess = true;

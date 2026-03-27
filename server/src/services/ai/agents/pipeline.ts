@@ -3,9 +3,10 @@ import { toCompactLensLibrary } from "../../../domain/generation/core-lenses";
 import { wait } from "../helpers";
 import { NarrativeBlueprint, MasterBeatSheet } from "./types";
 import { runAgent1_NarrativeAnalysis } from "./agent1-narrative";
-import { runAgent2_VisualDirection } from "./agent2-visual";
+import { runAgent2_Annotation } from "./agent2-visual";
 import { runAgent3_AssetProduction } from "./agent3-asset";
 import { extractAssetsFromBeats, extractVisualDna } from "../style/index";
+import { segmentScript, countBeatSegments } from "./script-segmenter";
 
 // --- HELPER for Agent 2/3 Retry with Validation ---
 export async function executeWithRetryAndValidation<T>(
@@ -96,12 +97,19 @@ export const generateBeatSheet = async (
 
     const compactLensLibrary = toCompactLensLibrary();
 
+    // 确定性分段：将剧本拆为原子片段
+    const scriptText = overrideText || episode.script || '';
+    const segments = segmentScript(scriptText);
+    const beatSegmentCount = countBeatSegments(segments);
+
+    // 标注模式：确定性分段 + AI 标注
+    console.log(`[Pipeline] ANNOTATION mode: ${segments.length} segments → ${beatSegmentCount} expected beats`);
     const beatSheet = await executeWithRetryAndValidation(
-        () => runAgent2_VisualDirection(singleEpBlueprint, language, compactLensLibrary, overrideText || ""),
-        (res) => res && Array.isArray(res.beats) && res.beats.length > 0,
-        "Agent 2 (Visual Director)",
-        { episode: episode.episode_number, language },
-        1 // Agent 2 handles retries internally
+        () => runAgent2_Annotation(segments, language, compactLensLibrary),
+        (res) => res && Array.isArray(res.beats) && res.beats.length >= beatSegmentCount * 0.7,
+        "Agent 2 (Annotate)",
+        { episode: episode.episode_number, language, expectedBeats: beatSegmentCount },
+        2
     );
 
     let beatAssets = await extractAssetsFromBeats(beatSheet, language, existingAssets, workStyle, useOriginalCharacters);
