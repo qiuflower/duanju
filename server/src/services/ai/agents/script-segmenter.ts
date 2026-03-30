@@ -146,8 +146,11 @@ export function segmentScript(script: string): ScriptSegment[] {
 
     flushDialogue();
 
-    // 后处理：合并过短片段
-    const structuralResult = mergeShortSegments(segments);
+    // 后处理1：强制切分超长片段（针对所有类型的片段）
+    const splittedResult = splitLongSegments(segments, 120);
+
+    // 后处理2：合并过短片段
+    const structuralResult = mergeShortSegments(splittedResult);
 
     return structuralResult;
 }
@@ -156,39 +159,82 @@ export function segmentScript(script: string): ScriptSegment[] {
  * 按长度切块 — 最终 fallback
  * 在段落边界（空行/句号/换行）处切分，每块约 200 字
  */
-function chunkByLength(text: string, chunkSize: number = 200): ScriptSegment[] {
+function chunkByLength(text: string, chunkSize: number = 120): ScriptSegment[] {
     const paragraphs = text.split(/\n\s*\n/).filter(p => p.trim());
     const segments: ScriptSegment[] = [];
-    let buffer = '';
     let segIndex = 0;
 
     for (const para of paragraphs) {
-        const trimmed = para.trim();
-        if (!trimmed) continue;
+        const trimmedPara = para.trim();
+        if (!trimmedPara) continue;
 
-        if (buffer.length + trimmed.length > chunkSize && buffer.length > 0) {
-            segments.push({
-                index: segIndex++,
-                type: 'action',
-                raw_text: buffer.trim(),
-                characters: [],
-            });
-            buffer = trimmed;
+        if (trimmedPara.length > chunkSize) {
+            // Force split long dense paragraphs by Chinese sentence delimiters
+            const sentences = trimmedPara.match(/[^。！？.!?\n]+[。！？.!?\n]?/g) || [trimmedPara];
+            let currentBuffer = '';
+            for (const sentence of sentences) {
+                if (currentBuffer.length + sentence.length > chunkSize && currentBuffer.length > 0) {
+                    segments.push({ index: segIndex++, type: 'action', raw_text: currentBuffer.trim(), characters: [] });
+                    currentBuffer = sentence;
+                } else {
+                    currentBuffer += sentence;
+                }
+            }
+            if (currentBuffer.trim()) {
+                segments.push({ index: segIndex++, type: 'action', raw_text: currentBuffer.trim(), characters: [] });
+            }
         } else {
-            buffer += (buffer ? '\n' : '') + trimmed;
+            segments.push({ index: segIndex++, type: 'action', raw_text: trimmedPara, characters: [] });
         }
     }
 
-    if (buffer.trim()) {
-        segments.push({
-            index: segIndex++,
-            type: 'action',
-            raw_text: buffer.trim(),
-            characters: [],
-        });
+    return segments;
+}
+
+/**
+ * 全局后处理：强制切分所有超长的片段（对白、动作均适用）
+ */
+function splitLongSegments(segments: ScriptSegment[], maxLength: number = 120): ScriptSegment[] {
+    const result: ScriptSegment[] = [];
+    let segIndex = 0;
+
+    for (const seg of segments) {
+        if (seg.type === 'transition' || seg.type === 'scene_header') {
+            seg.index = segIndex++;
+            result.push(seg);
+            continue;
+        }
+
+        if (seg.raw_text.length > maxLength) {
+            // 利用中文句号、问号、叹号或换行特征强制物理切分
+            const sentences = seg.raw_text.match(/[^。！？.!?\n]+[。！？.!?\n]?/g) || [seg.raw_text];
+            let currentBuffer = '';
+            for (const sentence of sentences) {
+                if (currentBuffer.length + sentence.length > maxLength && currentBuffer.length > 0) {
+                    result.push({
+                        ...seg,
+                        index: segIndex++,
+                        raw_text: currentBuffer.trim(),
+                    });
+                    currentBuffer = sentence;
+                } else {
+                    currentBuffer += sentence;
+                }
+            }
+            if (currentBuffer.trim()) {
+                result.push({
+                    ...seg,
+                    index: segIndex++,
+                    raw_text: currentBuffer.trim(),
+                });
+            }
+        } else {
+            seg.index = segIndex++;
+            result.push(seg);
+        }
     }
 
-    return segments;
+    return result;
 }
 
 /**
@@ -214,7 +260,9 @@ function mergeShortSegments(segments: ScriptSegment[]): ScriptSegment[] {
         // 如果当前片段过短，尝试与下一个同类型/可合并片段合并
         if (seg.raw_text.length < MIN_MERGE_CHARS && i + 1 < segments.length) {
             const next = segments[i + 1];
-            if (next.type !== 'transition' && next.type !== 'scene_header') {
+            // 防止合并后超过切分上限（120字），否则等于白拆了
+            if (next.type !== 'transition' && next.type !== 'scene_header'
+                && seg.raw_text.length + next.raw_text.length <= 120) {
                 // 合并
                 result.push({
                     index: seg.index,

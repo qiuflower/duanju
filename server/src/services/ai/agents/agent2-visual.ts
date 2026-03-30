@@ -138,11 +138,20 @@ export const runAgent2_Annotation = async (
 
             result.beats = result.beats.map(beat => {
                 const seg = segmentMap.get(beat.beat_id);
-                if (seg && seg.scene_context) {
-                    const ctxString = seg.scene_context.trim();
-                    if (!beat.visual_action.includes(ctxString)) {
-                        beat.visual_action = `【环境位置：${ctxString}】 ${beat.visual_action}`;
+                if (seg) {
+                    const ctxString = seg.scene_context ? `【环境位置：${seg.scene_context.trim()}】\n` : '';
+                    let addon = beat.visual_action || '';
+
+                    // 防呆处理：去除大模型可能手欠带出的环境名或原文残留
+                    // 评审修复：禁止将不受信的 scene_context 直接传入 new RegExp，防止包含()等字符导致死循环或崩溃
+                    if (seg.scene_context) {
+                        addon = addon.split(seg.scene_context.trim()).join('');
+                        addon = addon.replace(/【环境位置.*?】/g, '');
                     }
+                    addon = addon.split(seg.raw_text).join(''); // 安全全量替换原文纯文本
+                    addon = addon.replace(/原文内容:|\[画面补充\]:|\[场景.*?\]|【场景.*?】/g, '').trim();
+
+                    beat.visual_action = `${ctxString}原文内容：${seg.raw_text}\n[画面补充]：${addon || '无'}`;
                 }
                 return beat;
             });

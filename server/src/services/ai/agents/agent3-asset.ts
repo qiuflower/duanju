@@ -194,5 +194,92 @@ export const runAgent3_AssetProduction = async (
         }
     }
 
+    // ── LLM 二次审查：语义匹配资产 ──
+    // 纯字符串匹配无法解决"车厢内" ≈ "中巴车内部"这类语义同义问题
+    // 用一次轻量 LLM 调用进行语义级别的资产-场景匹配
+    if (allScenes.length > 0 && assets.length > 0) {
+        try {
+            if (onProgress) onProgress('Asset Matching: Semantic review...');
+            const enrichedScenes = await semanticAssetMatch(allScenes, assets);
+            allScenes = enrichedScenes;
+        } catch (e: any) {
+            console.warn('[Agent3] Semantic asset match failed (non-fatal, keeping regex results):', e?.message || e);
+        }
+    }
+
     return allScenes;
 };
+
+/**
+ * LLM 语义资产匹配器 — 二次审查
+ * 将所有场景的 visual_desc 和完整资产清单发给 LLM，
+ * 让它基于语义理解返回每个场景应该关联的 asset_id 列表。
+ */
+async function semanticAssetMatch(scenes: Scene[], assets: Asset[]): Promise<Scene[]> {
+    const assetCatalog = assets.map(a => `${a.id} | ${a.name} | ${a.type || 'unknown'}`).join('\n');
+    const sceneList = scenes.map(s => `${s.id} | ${s.visual_desc || s.narration || ''}`).join('\n');
+
+    const matchSchema = {
+        type: Type.OBJECT,
+        properties: {
+            matches: {
+                type: Type.ARRAY,
+                items: {
+                    type: Type.OBJECT,
+                    properties: {
+                        scene_id: { type: Type.STRING },
+                        asset_ids: { type: Type.ARRAY, items: { type: Type.STRING } }
+                    },
+                    required: ["scene_id", "asset_ids"]
+                }
+            }
+        },
+        required: ["matches"]
+    };
+
+    const response = await retryWithBackoff<GenerateContentResponse>(() => ai.models.generateContent({
+        model: MODELS.TEXT_FAST,
+        contents: {
+            parts: [{
+                text: `请为以下每个场景匹配所有相关的资产ID。
+
+## 资产清单 (id | name | type)
+${assetCatalog}
+
+## 场景列表 (scene_id | visual_desc)
+${sceneList}
+
+规则：
+1. 基于语义理解匹配。例如场景提到"车厢内"，应匹配到"中巴车内部"资产。场景提到某角色，应匹配该角色的资产ID。
+2. 每个场景至少匹配1个location类型资产（如果有的话）和所有出现的character资产。
+3. 只返回资产清单中存在的ID，禁止编造。` }]
+        },
+        config: {
+            systemInstruction: '你是资产匹配专家。根据场景描述内容，精准匹配所有语义相关的资产。输出JSON格式。',
+            responseMimeType: "application/json",
+            responseSchema: matchSchema
+        }
+    }));
+
+    const parsed = safeJsonParse<any>(response.text, { matches: [] });
+    const matchMap = new Map<string, string[]>();
+
+    const validIds = new Set(assets.map(a => a.id));
+    for (const m of (parsed.matches || [])) {
+        if (m.scene_id && Array.isArray(m.asset_ids)) {
+            // 只保留有效的资产 ID
+            const validMatches = m.asset_ids.filter((id: string) => validIds.has(id));
+            matchMap.set(m.scene_id, validMatches);
+        }
+    }
+
+    // 合并：将 LLM 语义匹配结果与已有的 regex 匹配结果取并集
+    return scenes.map(scene => {
+        const llmIds = matchMap.get(scene.id) || [];
+        const existingIds = new Set(scene.assetIds || []);
+        for (const id of llmIds) {
+            existingIds.add(id);
+        }
+        return { ...scene, assetIds: [...existingIds] };
+    });
+}
