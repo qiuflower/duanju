@@ -356,6 +356,77 @@ export class T8StarProvider implements IAIProvider {
             return { text, candidates: [{ content: { parts: [{ text }] } }] };
         }
 
+        // --- T8Star Image Generation Intercept ---
+        if (model === "gemini-3.1-flash-image-preview-2k" || model.includes("image") || model.includes("imagen") || model === "nano-banana-pro") {
+            let prompt = "";
+            let refImages: string[] = [];
+
+            for (const msg of messages) {
+                if (msg.role === "user") {
+                    if (typeof msg.content === "string") {
+                        prompt += msg.content + "\n";
+                    } else if (Array.isArray(msg.content)) {
+                        for (const part of msg.content) {
+                            if (part.type === "text" && part.text) {
+                                prompt += part.text + "\n";
+                            } else if (part.type === "image_url" && part.image_url?.url) {
+                                refImages.push(part.image_url.url);
+                            }
+                        }
+                    }
+                }
+            }
+
+            prompt = prompt.trim();
+            const imageSize = "2K";
+            let aspectRatio = "16:9";
+            
+            if (config?.imageConfig?.aspectRatio) {
+                aspectRatio = config.imageConfig.aspectRatio;
+            } else if (config?.imageConfig?.aspect_ratio) {
+                aspectRatio = config.imageConfig.aspect_ratio;
+            }
+
+            const imageBody: any = {
+                model: "nano-banana-pro",
+                prompt: prompt,
+                response_format: "b64_json",
+                image_size: imageSize,
+                aspect_ratio: aspectRatio
+            };
+
+            if (refImages.length > 0) {
+                imageBody.image = refImages;
+            }
+
+            const imageData = await this.postJson(this.mediaBaseUrl, "/v1/images/generations", imageBody, this.imageApiKey);
+            
+            let b64 = imageData?.b64_json || imageData?.data?.[0]?.b64_json || imageData?.image?.b64_json || imageData?.output?.b64_json;
+            if (b64) {
+                 // Clean up any double data URI prefix
+                 b64 = b64.replace(/^data:image\/[a-zA-Z0-9.+]+;base64,/, "");
+                 return {
+                    text: "",
+                    candidates: [
+                        {
+                            content: {
+                                parts: [
+                                    {
+                                        inlineData: {
+                                            mimeType: "image/png",
+                                            data: b64,
+                                        },
+                                    },
+                                ],
+                            },
+                        },
+                    ],
+                };
+            }
+            throw new Error(`Failed to extract image from response: ${JSON.stringify(imageData)}`);
+        }
+        // --- End Image Generation Intercept ---
+
         // Use mediaBaseUrl for other models (e.g. image generation fallback)
         const body: any = { model, stream: false, messages };
 
