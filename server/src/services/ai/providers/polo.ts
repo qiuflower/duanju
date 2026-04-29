@@ -98,6 +98,7 @@ export class PoloProvider implements IAIProvider {
                 ...(apiKey ? { "Authorization": `Bearer ${apiKey}` } : {}),
             },
             body: JSON.stringify(body),
+            timeout: 15000, // 15 seconds timeout
         });
         if (!res.ok) {
             const text = await res.text().catch(() => "");

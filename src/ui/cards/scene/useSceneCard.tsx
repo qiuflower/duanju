@@ -18,6 +18,8 @@ export interface UseSceneCardProps {
     globalStyle: GlobalStyle;
     areAssetsReady?: boolean;
     videoAssetsReady?: boolean;
+    checkImageReady?: (optionId?: string) => boolean;
+    checkVideoReady?: (optionId?: string) => boolean;
     assets?: Asset[];
     onAddAsset?: (asset: Asset | Asset[]) => void;
     language?: string;
@@ -35,6 +37,8 @@ export function useSceneCard(props: UseSceneCardProps) {
         globalStyle,
         areAssetsReady = true,
         videoAssetsReady = true,
+        checkImageReady,
+        checkVideoReady,
         assets = [],
         onAddAsset,
         language = 'Chinese',
@@ -51,7 +55,8 @@ export function useSceneCard(props: UseSceneCardProps) {
     const mediaState = useSceneMedia({
         scene, characterDesc, globalStyle, assets,
         areAssetsReady, language, chapterScenes, onUpdate,
-        onGenerateImageOverride, onImageGenerated, onVideoGenerated
+        onGenerateImageOverride, onImageGenerated, onVideoGenerated,
+        checkImageReady, checkVideoReady
     });
 
     // ── Sync prop image/video url with local status ──

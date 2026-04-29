@@ -3,7 +3,7 @@
  * Replaces direct AI service imports (which now live on the backend).
  */
 
-const API_BASE = '/api';
+const API_BASE = (import.meta as any).env?.DEV ? 'http://127.0.0.1:3002/api' : '/api';
 
 async function post<T = any>(path: string, body: any): Promise<T> {
     const res = await fetch(`${API_BASE}${path}`, {

@@ -276,9 +276,27 @@ export const generateSceneImage = async (
     const parts: any[] = [];
     let instructions = "";
 
+    let charCount = 0;
+    let locCount = 0;
+    let itemCount = 0;
+    let refFrameCount = 0;
+    const nameToAliasMap = new Map<string, string>();
+
     // 2.2 Next push the asset reference images
     usedAssets.forEach((asset) => {
         if (asset.refImageUrl) {
+            let alias = "";
+            if (isStoryboardTag(asset.name)) {
+                alias = `[Reference ${String.fromCharCode(65 + refFrameCount++)}]`;
+            } else if (asset.type === 'character') {
+                alias = `[Character ${String.fromCharCode(65 + charCount++)}]`;
+            } else if (asset.type === 'item') {
+                alias = `[Object ${String.fromCharCode(65 + itemCount++)}]`;
+            } else {
+                alias = `[Location ${String.fromCharCode(65 + locCount++)}]`;
+            }
+            nameToAliasMap.set(asset.name, alias);
+
             const cleanBase64 = asset.refImageUrl.replace(/^data:image\/(png|jpeg|jpg);base64,/, "");
             parts.push({
                 inlineData: {
@@ -286,12 +304,21 @@ export const generateSceneImage = async (
                     data: cleanBase64
                 }
             });
-            instructions += ` Reference Image ${parts.length} is ${asset.name} (${asset.type}).`;
+            instructions += ` Reference Image ${parts.length} is ${alias}.`;
         }
     });
 
     // 3. Construct Final Prompt
-    let fullText = stripAssetTags(finalPrompt);
+    // Dynamically replace asset tags with their assigned aliases to avoid semantic leakage
+    const ASSET_TAG_REGEX_LOCAL = /\[@图像_([^#\]]+)(?:#([a-zA-Z0-9_]+))?\]|@图像_([^\s，。,.;；：:！!？?、）)｝}\]\[（(｛{@#]+)(?:#([a-zA-Z0-9_]+))?/g;
+    let fullText = finalPrompt.replace(ASSET_TAG_REGEX_LOCAL, (match, p1, p2, p3, p4) => {
+        const name = p1 || p3;
+        if (name && nameToAliasMap.has(name)) {
+            return nameToAliasMap.get(name)!;
+        }
+        return name || '';
+    }).replace(/\s{2,}/g, ' ').trim();
+
     if (instructions) {
         fullText = ` ${instructions} ${fullText}. `;
     }
@@ -300,18 +327,42 @@ export const generateSceneImage = async (
 
     console.log(`[Scene Gen] Final Prompt: ${fullText}`);
 
-    // 4. Call Model
+    const fs = require('fs');
+    const logFile = 'C:\\Users\\Administrator\\Desktop\\duanju\\duanju0302\\server-debug.log';
+    const log = (msg: string) => {
+        const line = `[${new Date().toISOString()}] ${msg}\n`;
+        console.log(line.trim());
+        try { fs.appendFileSync(logFile, line); } catch(e){}
+    };
+
+    log(`[Scene Gen] Calling generateContent...`);
+    const startTime = Date.now();
+
+    log(`[Scene Gen] Calling generateContent with retryWithBackoff...`);
     const response = await retryWithBackoff<GenerateContentResponse>(() => ai.models.generateContent({
         model: MODELS.IMAGE_GEN,
         contents: { parts: parts },
         config: { imageConfig: { aspectRatio: ar } }
-    }), 2, 2000);
+    }), 1, 2000);
+
+    const elapsed = Date.now() - startTime;
+    log(`[Scene Gen] generateContent finished in ${elapsed}ms.`);
 
     if (!response.candidates || response.candidates.length === 0) {
+        log(`[Scene Gen] ERROR: No candidates returned.`);
         throw new Error("Generation blocked by safety filters or no candidates returned.");
     }
 
+    log(`[Scene Gen] Extracting image from response...`);
     const raw = extractImageFromResponse(response);
-    const imageUrl = await ensurePngDataUrl(raw);
+    
+    log(`[Scene Gen] Image extracted, length: ${raw.length}. Bypassing sharp processing for Data URLs...`);
+    let imageUrl = raw;
+    if (raw.startsWith('http')) {
+        log(`[Scene Gen] Image is HTTP URL, ensuring PNG...`);
+        imageUrl = await ensurePngDataUrl(raw, 0); // 0 = no resize
+    }
+    
+    log(`[Scene Gen] Final image ready, length: ${imageUrl.length}. Returning to frontend...`);
     return { imageUrl };
 };

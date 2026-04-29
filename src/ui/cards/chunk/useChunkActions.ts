@@ -40,14 +40,18 @@ export function useChunkActions({
     const anyAssetPending = chunk.assets.length > 0 && chunk.assets.some(a => !a.refImageUrl && !a.refImageAssetId);
 
     // Per-scene asset readiness
-    const getSceneAssetsReady = (scene: Scene): boolean => {
-        // ENFORCE: All chunk assets must be generated before any scene image can be generated
-        if (anyAssetPending) return false;
+    const getSceneAssetsReady = (scene: Scene, optionId?: string): boolean => {
+        // Find the prompt for the option
+        let prompt = scene.np_prompt || '';
+        if (optionId && scene.prompt_options) {
+            const opt = scene.prompt_options.find(o => o.option_id === optionId);
+            if (opt) prompt = opt.np_prompt || '';
+        }
 
         // No prompt generated yet → not ready
-        if (!scene.np_prompt?.trim()) return false;
+        if (!prompt.trim()) return false;
         if (chunk.assets.length === 0) return true;
-        const tags = extractAssetTags(scene.np_prompt || '').filter(t => !isStoryboardTag(t.name));
+        const tags = extractAssetTags(prompt).filter(t => !isStoryboardTag(t.name));
         if (tags.length === 0) return true;
         const referencedAssets: Asset[] = [];
         for (const tag of tags) {
@@ -64,13 +68,17 @@ export function useChunkActions({
 
     // Per-scene VIDEO asset readiness
     const MAX_VIDEO_REFS = 3;
-    const getVideoAssetsReady = (scene: Scene): boolean => {
-        // ENFORCE: All chunk assets must be generated before any scene video can be generated
-        if (anyAssetPending) return false;
+    const getVideoAssetsReady = (scene: Scene, optionId?: string): boolean => {
+        // Find the prompt for the option
+        let prompt = scene.video_prompt || '';
+        if (optionId && scene.prompt_options) {
+            const opt = scene.prompt_options.find(o => o.option_id === optionId);
+            if (opt) prompt = opt.video_prompt || '';
+        }
 
         // No video prompt generated yet → not ready
-        if (!scene.video_prompt?.trim()) return false;
-        const tags = extractAssetTags(scene.video_prompt || '');
+        if (!prompt.trim()) return false;
+        const tags = extractAssetTags(prompt);
         if (tags.length === 0) return true;
 
         // Count unique references — block if exceeding limit
@@ -238,8 +246,8 @@ export function useChunkActions({
                     let lastGeneratedUrl = scene.imageUrl;
 
                     await Promise.all(newOptions.map(async (opt, idx) => {
-                        // Only generate if option missing image
-                        if (!opt.imageUrl && !opt.imageAssetId) {
+                        // Only generate if option missing image AND its specific references are ready
+                        if (!opt.imageUrl && !opt.imageAssetId && getSceneAssetsReady(scene, opt.option_id)) {
                             const resultUrl = await onGenerateImage(scene, chunk.assets, opt.option_id, chunk.scenes);
                             newOptions[idx] = { ...newOptions[idx], imageUrl: resultUrl };
                             anyOptionUpdated = true;

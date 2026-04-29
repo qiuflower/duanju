@@ -190,10 +190,6 @@ export const runAgent3_AssetProductionStream = async function* (
                     if (!np || np === "..." || np.trim().length < 5) {
                         np = (scene.video_prompt || "").replace(/\s*\d+-\d+s:\s*/g, ' ').trim();
                     }
-                    if (!np.includes(`--ar ${aspectRatio} --v 6.0`)) {
-                        np = np.replace(/--ar\s+\S+/g, '').trim();
-                        np = `${np} --ar ${aspectRatio} --v 6.0`;
-                    }
 
                     const allPromptText = `${scene.video_prompt || ''} ${np}`;
                     const tagMatches = [...allPromptText.matchAll(ASSET_TAG_REGEX)];
@@ -229,10 +225,6 @@ export const runAgent3_AssetProductionStream = async function* (
                             let optNp = opt.np_prompt || "";
                             if (!optNp || optNp === "..." || optNp.trim().length < 5) {
                                 optNp = (opt.video_prompt || "").replace(/\s*\d+-\d+s:\s*/g, ' ').trim();
-                            }
-                            if (!optNp.includes(`--ar ${aspectRatio} --v 6.0`)) {
-                                optNp = optNp.replace(/--ar\s+\S+/g, '').trim();
-                                optNp = `${optNp} --ar ${aspectRatio} --v 6.0`;
                             }
                             opt.np_prompt = injectTagIds(optNp, assets);
                         }

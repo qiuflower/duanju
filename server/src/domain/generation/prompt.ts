@@ -402,7 +402,7 @@ Output language: ${language}.
         "video_lens": "对应当前系统内的 Shot ID（从内置库挑选最接近该方案的）",
         "video_camera": "对应该方案的运镜指令",
         "video_prompt": "0-Xs: [该方案动作...]",
-        "np_prompt": "[该方案构图与主体]..., 8k resolution"
+        "np_prompt": "[该方案构图与主体]..."
       },
       {
         "option_id": "B",
@@ -410,7 +410,7 @@ Output language: ${language}.
         "video_lens": "⚠️完全不同的另外一种焦段机位",
         "video_camera": "⚠️完全不同的摄影机运动",
         "video_prompt": "0-Xs: [根据B镜头的全新视角，重新编写区别于A的动作与画面流]",
-        "np_prompt": "[采用对应B镜头的全新构图结构特征，描述主角及所处场景细节], 8k resolution"
+        "np_prompt": "[采用对应B镜头的全新构图结构特征，描述主角及所处场景细节]"
       },
       {
         "option_id": "C",
@@ -418,7 +418,7 @@ Output language: ${language}.
         "video_lens": "第三种构图焦段",
         "video_camera": "第三种调度运动",
         "video_prompt": "0-Xs: [第三种终极拍摄解法，与A/B彻底隔绝开来的动作描写写法]",
-        "np_prompt": "[基于C镜头独特的构图结构特征描述静态画面质感], 8k resolution"
+        "np_prompt": "[基于C镜头独特的构图结构特征描述静态画面质感]"
       }
     ]
   }

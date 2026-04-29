@@ -25,6 +25,8 @@ interface SceneCardProps {
     globalStyle: GlobalStyle;
     areAssetsReady?: boolean;
     videoAssetsReady?: boolean;
+    checkImageReady?: (optionId?: string) => boolean;
+    checkVideoReady?: (optionId?: string) => boolean;
     assets?: Asset[];
     onAddAsset?: (asset: Asset | Asset[]) => void;
     language?: string;
@@ -146,12 +148,13 @@ const SceneCard: React.FC<SceneCardProps> = (props) => {
                             </div>
                             
                             {/* Tabs Row */}
-                            <div className="flex border-b border-white/5">
-                                {state.scene.prompt_options.map((opt) => {
+                            <div className="flex border-b border-black bg-[#121212] gap-1 px-2 pt-2">
+                                {state.scene.prompt_options.map((opt, index) => {
                                     const isActive = viewingOption?.option_id === opt.option_id;
+                                    const displayId = opt.option_id || String.fromCharCode(65 + index);
                                     return (
                                         <button
-                                            key={opt.option_id}
+                                            key={opt.option_id || index}
                                             onClick={() => {
                                                 setViewingOptionId(opt.option_id);
                                                 // Always Auto-adopt the option's media when clicking its tab
@@ -166,9 +169,9 @@ const SceneCard: React.FC<SceneCardProps> = (props) => {
                                                 state.onUpdate(state.scene.id, 'assetIds', opt.assetIds || []);
                                                 state.onUpdate(state.scene.id, 'videoAssetIds', opt.videoAssetIds || []);
                                             }}
-                                            className={`flex-1 py-2.5 text-xs font-bold transition-colors border-b-2 flex justify-center items-center ${isActive ? 'bg-yellow-600/15 text-yellow-500 border-yellow-500' : 'bg-transparent text-gray-500 border-transparent hover:bg-white/5 hover:text-gray-300'}`}
+                                            className={`flex-1 py-2 text-xs font-bold transition-all border-b-2 rounded-t-md flex justify-center items-center ${isActive ? 'bg-[#1e1e1e] text-yellow-500 border-yellow-500 shadow-sm' : 'bg-black/40 text-gray-500 border-transparent hover:bg-white/5 hover:text-gray-300'}`}
                                         >
-                                            方案{opt.option_id}: 实拍参考
+                                            方案{displayId}: 实拍参考
                                         </button>
                                     );
                                 })}

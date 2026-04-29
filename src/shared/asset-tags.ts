@@ -27,9 +27,9 @@ export function extractAssetTags(text: string): ParsedTag[] {
     }));
 }
 
-/** Check if a tag name is a storyboard reference (分镜S01, 分镜E1_S01, 分镜E1_S01-A, etc.) */
+/** Check if a tag name is a storyboard reference (分镜S01, 分镜E1_S01, 分镜E1_S01-A, 分镜E1_S01_copy, etc.) */
 export function isStoryboardTag(name: string): boolean {
-    return /^分镜(E\d+_)?S\d+(?:-[a-zA-Z0-9]+)?$/.test(name);
+    return /^分镜(E\d+_)?S\d+(?:[-_][a-zA-Z0-9]+)*$/.test(name);
 }
 
 /** Extract tag display names, excluding 分镜 tags */

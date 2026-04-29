@@ -9,11 +9,11 @@ export default defineConfig(() => {
       host: '0.0.0.0',
       proxy: {
         '/api': {
-          target: 'http://localhost:3002',
+          target: 'http://127.0.0.1:3002',
           changeOrigin: true,
           secure: false,
-          timeout: 300000,
-          proxyTimeout: 300000,
+          timeout: 600000,
+          proxyTimeout: 600000,
         }
       }
     },

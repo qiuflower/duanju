@@ -106,21 +106,58 @@ export class T8StarProvider implements IAIProvider {
     }
 
     private async postJson(baseUrl: string, path: string, body: any, apiKey: string) {
+        const fs = require('fs');
+        const logFile = 'C:\\Users\\Administrator\\Desktop\\duanju\\duanju0302\\server-debug.log';
+        const log = (msg: string) => {
+            const line = `[${new Date().toISOString()}] ${msg}\n`;
+            console.log(line.trim());
+            try { fs.appendFileSync(logFile, line); } catch(e){}
+        };
+
         const url = `${baseUrl.replace(/\/+$/, "")}${path}`;
-        const res = await fetch(url, {
-            method: "POST",
-            headers: {
-                Accept: "application/json",
-                "Content-Type": "application/json",
-                ...(apiKey ? { "Authorization": `Bearer ${apiKey}` } : {}),
-            },
-            body: JSON.stringify(body),
-        });
-        if (!res.ok) {
-            const text = await res.text().catch(() => "");
-            throw new Error(`HTTP Error: ${res.status} ${text}`);
+        log(`[T8Star API] POST ${url}...`);
+
+        const controller = new AbortController();
+        const timeout = setTimeout(() => {
+            log(`[T8Star API] ERROR: Hard timeout of 300s reached! Aborting connection.`);
+            controller.abort();
+        }, 300000); // 300s hard timeout
+
+        try {
+            const startTime = Date.now();
+            const res = await fetch(url, {
+                method: "POST",
+                headers: {
+                    Accept: "application/json",
+                    "Content-Type": "application/json",
+                    "Authorization": `Bearer ${apiKey}`,
+                },
+                body: JSON.stringify(body),
+                signal: controller.signal as any, // Cast to any to avoid type mismatch with older node-fetch types
+            });
+
+            const timeToHeaders = Date.now() - startTime;
+            log(`[T8Star API] POST ${url} returned ${res.status} in ${timeToHeaders}ms`);
+
+            if (!res.ok) {
+                const text = await res.text().catch(() => "");
+                throw new Error(`HTTP Error: ${res.status} ${text}`);
+            }
+
+            // Read the body with an idle timeout
+            const buffer = await res.arrayBuffer();
+            const timeToBody = Date.now() - startTime;
+            log(`[T8Star API] Downloaded body (${buffer.byteLength} bytes) in ${timeToBody}ms`);
+            
+            clearTimeout(timeout);
+
+            const jsonString = Buffer.from(buffer).toString('utf-8');
+            return JSON.parse(jsonString);
+        } catch (error: any) {
+            clearTimeout(timeout);
+            log(`[T8Star API] Fetch failed: ${error?.message || error}`);
+            throw error;
         }
-        return res.json() as Promise<any>;
     }
 
     private async postChatCompletionsT8star(body: any, apiKey: string, stream: boolean) {
@@ -414,7 +451,7 @@ export class T8StarProvider implements IAIProvider {
             const imageBody: any = {
                 model: model,
                 prompt: prompt,
-                response_format: "b64_json",
+                response_format: "url",
             };
 
             if (config?.imageConfig?.useOfficialKey) {
@@ -437,6 +474,25 @@ export class T8StarProvider implements IAIProvider {
             const imageData = await this.postJson(this.mediaBaseUrl, "/v1/images/generations", imageBody, apiKey);
             
             let b64 = imageData?.b64_json || imageData?.data?.[0]?.b64_json || imageData?.image?.b64_json || imageData?.output?.b64_json;
+            let url = imageData?.data?.[0]?.url || imageData?.url;
+
+            if (url && typeof url === "string" && url.startsWith("http")) {
+                 return {
+                    text: `![image](${url})`,
+                    candidates: [
+                        {
+                            content: {
+                                parts: [
+                                    {
+                                        text: `![image](${url})`,
+                                    },
+                                ],
+                            },
+                        },
+                    ],
+                };
+            }
+
             if (b64) {
                  // Clean up any double data URI prefix
                  b64 = b64.replace(/^data:image\/[a-zA-Z0-9.+]+;base64,/, "");

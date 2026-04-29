@@ -114,14 +114,12 @@ class ModelManager {
                 let requestedModel = this.config.t8starImageModel || "gpt-image-2";
                 const isAsset = args.config?.imageConfig?.isAsset;
                 
-                // Deep copy new config to avoid polluting caller reference
                 const newConfig = { ...(args.config || {}) };
                 newConfig.imageConfig = { ...(newConfig.imageConfig || {}) };
 
                 if (requestedModel === "gpt-image-2-official") {
-                    requestedModel = "gpt-image-2"; // 永远把最终 model 名变回合规的 gpt-image-2
+                    requestedModel = "gpt-image-2"; 
                     if (!isAsset) {
-                        // 只有分镜图（非资产图）才使用新 Key和新参数
                         newConfig.imageConfig.useOfficialKey = true;
                         newConfig.imageConfig.size = this.config.t8starImageSize || "auto";
                         newConfig.imageConfig.quality = this.config.t8starImageQuality || "auto";

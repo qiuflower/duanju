@@ -109,11 +109,11 @@ const textToHtml = (
             const info = findAssetInfo(tagName, assets, sceneImages, tagId);
             const colors = CHIP_COLORS[mode];
             const imgHtml = info.thumb
-                ? `<img src="${info.thumb}" style="width:16px;height:16px;border-radius:2px;object-fit:cover;vertical-align:middle;margin-right:3px;display:inline-block;" />`
-                : `<span style="margin-right:3px;">🧑</span>`;
+                ? `<img src="${info.thumb}" style="width:14px;height:14px;border-radius:2px;object-fit:cover;vertical-align:-2px;margin-right:3px;display:inline-block;" />`
+                : `<span style="vertical-align:-1px;margin-right:3px;display:inline-block;font-size:12px;">🧑</span>`;
             // Store both name and optional id in data attributes
             const idAttr = tagId ? ` data-mention-id="${tagId}"` : '';
-            return `<span contenteditable="false" data-mention="${tagName}"${idAttr} style="display:inline-flex;align-items:center;gap:1px;background:${colors.bg};border:1px solid ${colors.border};border-radius:4px;padding:1px 5px;margin:0 1px;font-size:11px;color:${colors.text};cursor:default;vertical-align:middle;line-height:1.6;user-select:all;font-weight:500;">${imgHtml}${info.displayName}</span>\u00A0`;
+            return `<span contenteditable="false" data-mention="${tagName}"${idAttr} style="display:inline-block;background:${colors.bg};border:1px solid ${colors.border};border-radius:4px;padding:1px 5px;margin:0 2px;font-size:12px;color:${colors.text};cursor:default;vertical-align:baseline;line-height:normal;user-select:all;font-weight:500;">${imgHtml}${info.displayName}</span>\u200B`;
         }
     );
 };
@@ -123,7 +123,7 @@ const htmlToText = (el: HTMLDivElement): string => {
     let result = '';
     const walk = (node: Node) => {
         if (node.nodeType === Node.TEXT_NODE) {
-            result += node.textContent || '';
+            result += (node.textContent || '').replace(/\u200B/g, '');
         } else if (node.nodeType === Node.ELEMENT_NODE) {
             const elem = node as HTMLElement;
             // Mention chip → convert back to @图像_xxx or @图像_xxx#id
@@ -396,17 +396,17 @@ const MentionTextarea: React.FC<MentionTextareaProps> = ({
         if (assetId && assetId !== '__base__') {
             chip.dataset.mentionId = assetId;
         }
-        chip.style.cssText = `display:inline-flex;align-items:center;gap:1px;background:${colors.bg};border:1px solid ${colors.border};border-radius:4px;padding:1px 5px;margin:0 1px;font-size:11px;color:${colors.text};cursor:default;vertical-align:middle;line-height:1.6;user-select:all;font-weight:500;`;
+        chip.style.cssText = `display:inline-block;background:${colors.bg};border:1px solid ${colors.border};border-radius:4px;padding:1px 5px;margin:0 2px;font-size:12px;color:${colors.text};cursor:default;vertical-align:baseline;line-height:normal;user-select:all;font-weight:500;`;
 
         if (thumb) {
             const img = document.createElement('img');
             img.src = thumb;
-            img.style.cssText = 'width:16px;height:16px;border-radius:2px;object-fit:cover;vertical-align:middle;margin-right:3px;display:inline-block;';
+            img.style.cssText = 'width:14px;height:14px;border-radius:2px;object-fit:cover;vertical-align:-2px;margin-right:3px;display:inline-block;';
             chip.appendChild(img);
         } else {
             const icon = document.createElement('span');
             icon.textContent = '🧑';
-            icon.style.marginRight = '3px';
+            icon.style.cssText = 'vertical-align:-1px;margin-right:3px;display:inline-block;font-size:12px;';
             chip.appendChild(icon);
         }
 
@@ -415,7 +415,7 @@ const MentionTextarea: React.FC<MentionTextareaProps> = ({
 
         // Insert chip + trailing space
         range.insertNode(chip);
-        const space = document.createTextNode('\u00A0');
+        const space = document.createTextNode('\u200B');
         chip.after(space);
 
         // Move cursor after space

@@ -15,13 +15,16 @@ export interface UseSceneMediaProps {
     onGenerateImageOverride?: (scene: Scene, optionId?: string) => Promise<string>;
     onImageGenerated?: (id: string, url: string, imageAssetId?: string, optionId?: string) => void;
     onVideoGenerated?: (id: string, url: string, assetId?: string, optionId?: string) => void;
+    checkImageReady?: (optionId?: string) => boolean;
+    checkVideoReady?: (optionId?: string) => boolean;
 }
 
 export function useSceneMedia(props: UseSceneMediaProps) {
     const {
         scene, characterDesc, globalStyle, assets,
         areAssetsReady, language, chapterScenes, onUpdate,
-        onGenerateImageOverride, onImageGenerated, onVideoGenerated
+        onGenerateImageOverride, onImageGenerated, onVideoGenerated,
+        checkImageReady, checkVideoReady
     } = props;
 
     const [genStatusMap, setGenStatusMap] = useState<Record<string, ImageGenStatus>>({});
@@ -131,6 +134,10 @@ export function useSceneMedia(props: UseSceneMediaProps) {
         try {
             const newOptions = [...scene.prompt_options];
             await Promise.all(newOptions.map(async (opt, idx) => {
+                if (checkImageReady && !checkImageReady(opt.option_id)) {
+                    setGenStatusMap(prev => ({ ...prev, [opt.option_id]: ImageGenStatus.IDLE }));
+                    return; // Skip if this specific option is not ready
+                }
                 try {
                     const result = await generateSceneImage(scene, globalStyle, assets, opt.option_id, chapterScenes);
                     const url = result.imageUrl || result;
@@ -175,6 +182,10 @@ export function useSceneMedia(props: UseSceneMediaProps) {
         try {
             const newOptions = [...scene.prompt_options];
             await Promise.all(newOptions.map(async (opt, idx) => {
+                if (checkVideoReady && !checkVideoReady(opt.option_id)) {
+                    setVideoStatusMap(prev => ({ ...prev, [opt.option_id]: ImageGenStatus.IDLE }));
+                    return; // Skip if this specific option is not ready
+                }
                 try {
                     let imageToUse = opt.imageUrl || scene.imageUrl;
                     // Preload asset if possible (simplification: assumes URL is ready if already loaded)

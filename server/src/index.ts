@@ -53,6 +53,11 @@ app.use('/api/', (req, res, next) => {
 });
 
 // ===== NEW: Business Logic Routes =====
+app.use((req, res, next) => {
+    console.log(`[Express] Received ${req.method} ${req.originalUrl}`);
+    next();
+});
+
 app.use('/api/pipeline', pipelineRouter);
 app.use('/api/media', mediaRouter);
 app.use('/api/style', styleRouter);
@@ -147,7 +152,7 @@ app.get('*', (req, res) => {
     }
 });
 
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
     console.log(`Server is running on http://localhost:${PORT}`);
     console.log('Business Logic API routes:');
     console.log('  POST /api/pipeline/analyze');
@@ -166,3 +171,9 @@ app.listen(PORT, () => {
     console.log('  GET/POST /api/config');
 
 });
+
+// Increase server timeouts for long-running AI tasks (e.g., image generation)
+// 10 minutes = 600,000 ms
+server.setTimeout(600000);
+server.keepAliveTimeout = 600000;
+server.headersTimeout = 601000;

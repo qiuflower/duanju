@@ -282,6 +282,8 @@ const ChunkPanel: React.FC<ChunkPanelProps> = ({
                                         globalStyle={styleState}
                                         areAssetsReady={getSceneAssetsReady(scene)}
                                         videoAssetsReady={getVideoAssetsReady(scene)}
+                                        checkImageReady={(optId) => getSceneAssetsReady(scene, optId)}
+                                        checkVideoReady={(optId) => getVideoAssetsReady(scene, optId)}
                                         assets={chunk.assets}
                                         onAddAsset={handleAddChunkAssets}
                                         language={language}
