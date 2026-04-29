@@ -1,3 +1,22 @@
+export interface LensReference {
+    shot_name: string;        // 参考片段名
+    description: string;      // 解析 
+    searchKeyword: string;    // 高精度搜索关键词
+    timestamp: string;        // 剧情时刻
+}
+
+export interface PromptOption {
+  option_id: string;        // "A" / "B" / "C"
+  lens_reference: LensReference;
+  np_prompt: string;        
+  video_prompt: string;     
+  video_camera: string;
+  video_lens: string;       
+  imageUrl?: string;        // Option-specific image URL
+  imageAssetId?: string;    // Option-specific image asset ID
+  videoUrl?: string;        // Option-specific video URL
+  videoAssetId?: string;    // Option-specific video asset ID
+}
 
 export interface DialogueLine {
     speaker: string;
@@ -17,6 +36,8 @@ export interface Scene {
     audio_dialogue?: DialogueLine[];
     audio_sfx?: string;
     audio_bgm?: string;
+    prompt_options?: PromptOption[];
+    selected_option_id?: string;
     imageUrl?: string;
     imageAssetId?: string;
     videoUrl?: string;
@@ -30,6 +51,8 @@ export interface Scene {
     useAssets?: boolean;
     isStartEndFrameMode?: boolean;
     video_prompt_backup?: string;
+    status?: 'success' | 'failed' | 'pending';
+    error?: string;
 }
 
 
@@ -82,6 +105,7 @@ export interface GlobalStyle {
     texture: StyleSetting;
     aspectRatio: '16:9' | '9:16';
     visualTags: string;
+    visualDnaLocked?: boolean;
     narrationVoice: string;
 }
 

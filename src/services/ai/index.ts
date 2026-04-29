@@ -16,6 +16,7 @@ export {
     analyzeNarrative,
     generateBeatSheet,
     generatePromptsFromBeats,
+    generatePromptsFromBeatsStream,
     generateEpisodeScenes,
     generateAssetImage,
     buildAssetPrompts,

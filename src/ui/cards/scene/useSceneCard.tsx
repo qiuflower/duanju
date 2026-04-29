@@ -8,13 +8,13 @@ export interface UseSceneCardProps {
     scene: Scene;
     characterDesc: string;
     labels: Translation;
-    onUpdate: (id: string, field: keyof Scene, value: any) => void;
+    onUpdate: (id: string, fieldOrUpdates: keyof Scene | Partial<Scene>, value?: any) => void;
     onDelete?: (id: string) => void;
     onDuplicate?: (id: string) => void;
     isGeneratingExternal?: boolean;
-    onGenerateImageOverride?: (scene: Scene) => Promise<string>;
-    onImageGenerated?: (id: string, url: string) => void;
-    onVideoGenerated?: (id: string, url: string, assetId?: string) => void;
+    onGenerateImageOverride?: (scene: Scene, optionId?: string) => Promise<string>;
+    onImageGenerated?: (id: string, url: string, imageAssetId?: string, optionId?: string) => void;
+    onVideoGenerated?: (id: string, url: string, assetId?: string, optionId?: string) => void;
     globalStyle: GlobalStyle;
     areAssetsReady?: boolean;
     videoAssetsReady?: boolean;
@@ -50,17 +50,9 @@ export function useSceneCard(props: UseSceneCardProps) {
 
     const mediaState = useSceneMedia({
         scene, characterDesc, globalStyle, assets,
-        useAssets: assetState.useAssets,
         areAssetsReady, language, chapterScenes, onUpdate,
         onGenerateImageOverride, onImageGenerated, onVideoGenerated
     });
-
-    // ── Sync prop changes ──
-    useEffect(() => {
-        if (scene.useAssets !== undefined) {
-            assetState.setUseAssets(scene.useAssets);
-        }
-    }, [scene.useAssets]);
 
     // ── Sync prop image/video url with local status ──
     useEffect(() => {
@@ -91,8 +83,8 @@ export function useSceneCard(props: UseSceneCardProps) {
 
     return {
         // State from media
-        genStatus: mediaState.genStatus,
-        videoStatus: mediaState.videoStatus,
+        getGenStatus: mediaState.getGenStatus,
+        getVideoStatus: mediaState.getVideoStatus,
         viewMode: mediaState.viewMode,
         setViewMode: mediaState.setViewMode,
         ttsLoading: mediaState.ttsLoading,
@@ -104,8 +96,6 @@ export function useSceneCard(props: UseSceneCardProps) {
         fileInputRef: mediaState.fileInputRef,
 
         // State from assets
-        useAssets: assetState.useAssets,
-        setUseAssets: assetState.setUseAssets,
         activeAssetSelector: assetState.activeAssetSelector,
         setActiveAssetSelector: assetState.setActiveAssetSelector,
         sceneImages: assetState.sceneImages,
@@ -118,6 +108,8 @@ export function useSceneCard(props: UseSceneCardProps) {
         // Handlers from media
         handleGenerateImage: mediaState.handleGenerateImage,
         handleGenerateVideo: mediaState.handleGenerateVideo,
+        handleGenerateBatchImages: mediaState.handleGenerateBatchImages,
+        handleGenerateBatchVideos: mediaState.handleGenerateBatchVideos,
         handleNarrationTTS: mediaState.handleNarrationTTS,
         handleDownloadAudio: mediaState.handleDownloadAudio,
         handleUploadClick: mediaState.handleUploadClick,

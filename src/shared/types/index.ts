@@ -19,6 +19,26 @@ export interface Scene {
 
   // Multimodal Fields (Agent B)
   video_prompt?: string; // Full constructed video prompt
+  prompt_options?: Array<{
+    option_id: string;
+    lens_reference: {
+      shot_name: string;
+      description: string;
+      searchKeyword: string;
+      video_url: string;
+      timestamp: string;
+    };
+    video_lens: string;
+    video_camera: string;
+    video_prompt: string;
+    np_prompt: string;
+    imageUrl?: string;
+    imageAssetId?: string;
+    videoUrl?: string;
+    videoAssetId?: string;
+    assetIds?: string[];
+    videoAssetIds?: string[];
+  }>;
   audio_dialogue?: DialogueLine[];
   audio_sfx?: string;
   audio_bgm?: string;
@@ -89,6 +109,7 @@ export interface GlobalStyle {
   texture: StyleSetting;
   aspectRatio: '16:9' | '9:16';
   visualTags: string; // Global Visual DNA (Agent A)
+  visualDnaLocked?: boolean; // Whether the Global Visual DNA is locked
   narrationVoice: string; // New: Selected Voice ID
 }
 

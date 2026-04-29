@@ -38,8 +38,14 @@ const SceneImagePane: React.FC<SceneImagePaneProps> = ({
 
 
             <MentionTextarea
-                value={scene.np_prompt || ''}
-                onChange={(val) => onUpdate(scene.id, 'np_prompt', val)}
+                value={scene.np_prompt !== undefined ? scene.np_prompt : (scene.visual_desc || '')}
+                onChange={(val) => {
+                    if (scene.np_prompt !== undefined) {
+                        onUpdate(scene.id, 'np_prompt', val);
+                    } else {
+                        onUpdate(scene.id, 'visual_desc', val);
+                    }
+                }}
                 assets={assets}
                 sceneImages={sceneImages}
                 referencedAssetIds={scene.assetIds || []}

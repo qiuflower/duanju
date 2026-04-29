@@ -10,16 +10,16 @@ interface ChunkPanelProps {
     globalAssets: Asset[];
     styleState: GlobalStyle;
     labels: Translation;
-    onUpdateChunk: (id: string, updates: Partial<NovelChunk>) => void;
+    onUpdateChunk: (id: string, updates: Partial<NovelChunk> | ((c: NovelChunk) => Partial<NovelChunk>)) => void;
     onDeleteChunk: (id: string) => void;
     onCopyChunk: (id: string) => void;
-    onSceneUpdate: (chunkId: string, sceneId: string, updates: Partial<Scene>) => void;
+    onSceneUpdate: (chunkId: string, sceneId: string, updates: Partial<Scene> | ((prevScene: Scene) => Partial<Scene>)) => void;
     onDuplicateScene: (chunkId: string, sceneId: string) => void;
     onExtract: (chunk: NovelChunk) => Promise<Asset[]>;
     onGenerateScript: (chunk: NovelChunk) => Promise<Scene[]>;
     onGenerateBeats: (chunk: NovelChunk) => Promise<Scene[]>;
     onGeneratePrompts: (chunk: NovelChunk) => Promise<Scene[]>;
-    onGenerateImage: (scene: Scene, chunkAssets?: Asset[]) => Promise<string>;
+    onGenerateImage: (scene: Scene, chunkAssets?: Asset[], optionId?: string, allScenes?: Scene[]) => Promise<string>;
     language: string;
     isActive: boolean;
     onToggle: () => void;
@@ -220,7 +220,12 @@ const ChunkPanel: React.FC<ChunkPanelProps> = ({
 
                     <div className="group relative">
                         {(() => {
-                            const allHaveImages = chunk.scenes.length > 0 && chunk.scenes.every(s => !!s.imageUrl || !!s.imageAssetId);
+                            const allHaveImages = chunk.scenes.length > 0 && chunk.scenes.every(s => {
+                                if (s.prompt_options) {
+                                    return s.prompt_options.every(opt => !!opt.imageUrl || !!opt.imageAssetId);
+                                }
+                                return !!s.imageUrl || !!s.imageAssetId;
+                            });
                             const allVideoReady = allHaveImages && chunk.scenes.every(s => getVideoAssetsReady(s));
                             const filmReady = allVideoReady && loadingStep !== 'filming';
                             const hasNoVideoPrompts = chunk.scenes.length > 0 && chunk.scenes.some(s => !s.video_prompt?.trim());

@@ -22,13 +22,15 @@ router.post('/extract-assets', async (req: Request, res: Response) => {
 // POST /api/style/visual-dna
 router.post('/visual-dna', async (req: Request, res: Response) => {
     try {
-        const { workStyle, textureStyle, language } = req.body;
+        const { workStyle, textureStyle, language, lock, useOriginalCharacters, images } = req.body;
         if (!language) {
             return res.status(400).json({ error: 'Missing required field: language' });
         }
 
-        const result = await extractVisualDna(workStyle || '', textureStyle || '', language);
-        res.json(result);
+        const result = await extractVisualDna(workStyle || '', textureStyle || '', language, useOriginalCharacters || false, images);
+        
+        // 如果传入了 lock 参数，则可以在这里返回一个状态标记（具体锁定逻辑在前端更新 GlobalStyle）
+        res.json({ dna: result, locked: !!lock });
     } catch (e: any) {
         console.error('[Style/visual-dna]', e);
         res.status(500).json({ error: e?.message || 'Internal error' });

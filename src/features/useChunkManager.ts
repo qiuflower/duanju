@@ -1,6 +1,6 @@
 import React, { useRef } from 'react';
 import { AnalysisStatus, Scene, Asset, GlobalStyle, NovelChunk } from '@/shared/types';
-import { extractAssets, extractVisualDna, analyzeNarrative, generateEpisodeScenes, generateBeatSheet, generatePromptsFromBeats, buildAssetPrompts } from '@/services/ai';
+import { extractAssets, extractVisualDna, analyzeNarrative, generateEpisodeScenes, generateBeatSheet, generatePromptsFromBeatsStream, buildAssetPrompts } from '@/services/ai';
 import { loadAssetUrl, saveAsset } from '@/services/storage';
 import { mergeAssetsIntoGlobal, pruneOrphanedGlobalAssets } from '@/app/assetUtils';
 import { parseImportData } from '@/app/chunkUtils';
@@ -34,8 +34,12 @@ export function useChunkManager(deps: ChunkManagerDeps) {
     const extractingChunksRef = useRef<Set<string>>(new Set());
     const isAnalyzingRef = useRef(false);
 
-    const updateChunk = (id: string, updates: Partial<NovelChunk>) => {
-        setChunks(prev => prev.map(c => c.id === id ? { ...c, ...updates } : c));
+    const updateChunk = (id: string, updates: Partial<NovelChunk> | ((c: NovelChunk) => Partial<NovelChunk>)) => {
+        setChunks(prev => prev.map(c => {
+            if (c.id !== id) return c;
+            const changes = typeof updates === 'function' ? updates(c) : updates;
+            return { ...c, ...changes };
+        }));
     };
 
     const fallbackChunking = (text: string) => {
@@ -77,7 +81,7 @@ export function useChunkManager(deps: ChunkManagerDeps) {
 
             const result = await extractAssets(chunk.text, language, globalAssetsRef.current, workStyle, textureStyle, useOriginalCharacters, skipDna);
 
-            if (result.visualDna) {
+            if (result.visualDna && !globalStyle.visualDnaLocked && !globalStyle.visualTags) {
                 setGlobalStyle(prev => ({ ...prev, visualTags: result.visualDna }));
             }
 
@@ -127,7 +131,7 @@ export function useChunkManager(deps: ChunkManagerDeps) {
 
             const result = await extractAssets(textToUse, language, globalAssetsRef.current, workStyle, textureStyle, useOriginalCharacters);
 
-            if (result.visualDna) {
+            if (result.visualDna && !globalStyle.visualDnaLocked && !globalStyle.visualTags) {
                 setGlobalStyle(prev => ({ ...prev, visualTags: result.visualDna }));
             }
 
@@ -273,42 +277,34 @@ export function useChunkManager(deps: ChunkManagerDeps) {
             if (!chunk.beatSheet) throw new Error("No beat sheet found. Please generate storyboard first.");
             const epNum = chunk.episodeData?.episode_number || 0;
 
-            // 使用 chunk 级别资产（反映用户在分镜后的增删操作）
-            // 同时保留全局借用资产（场景中引用但不在 chunk 资产列表中的资产）
+            // Use latest assets and sync beats with user edits (already handled)
             const chunkAssetIds = new Set(chunk.assets.map(a => a.id));
             const borrowedAssets = globalAssetsRef.current.filter(
                 a => !chunkAssetIds.has(a.id) && chunk.scenes.some(s => s.assetIds?.includes(a.id))
             );
             const latestAssets = [...chunk.assets, ...borrowedAssets];
 
-            // 同步 beatSheet：过滤掉用户已删除的分镜（场景ID格式: E{epNum}_{beat_id}）
             const livingSceneIds = new Set(chunk.scenes.map(s => s.id));
             const filteredBeats = (chunk.beatSheet.beats || []).filter((beat: any) => {
                 const sceneId = `E${epNum}_${beat.beat_id}`;
                 return livingSceneIds.has(sceneId);
             });
 
-            // 将用户在 UI 中的手动编辑同步回 beat 数据，让 Agent 3 使用最新内容
             const sceneMap = new Map(chunk.scenes.map(s => [s.id, s]));
             const userSyncedBeats = filteredBeats.map((beat: any) => {
                 const scene = sceneMap.get(`E${epNum}_${beat.beat_id}`);
                 if (!scene) return beat;
                 const updated = { ...beat };
-
-                // visual_desc → visual_action (对比原始值，有变化才覆写)
                 const originalDesc = `[${beat.shot_name || beat.shot_id || ''}] ${beat.visual_action || ''}`;
                 if (scene.visual_desc && scene.visual_desc !== originalDesc) {
                     updated.visual_action = scene.visual_desc;
                 }
-                // video_camera → camera_movement
                 if (scene.video_camera && scene.video_camera !== (beat.camera_movement || '')) {
                     updated.camera_movement = scene.video_camera;
                 }
-                // video_lens → shot_id
                 if (scene.video_lens && scene.video_lens !== (beat.shot_id || '')) {
                     updated.shot_id = scene.video_lens;
                 }
-                // audio_sfx → audio_subtext
                 if (scene.audio_sfx && scene.audio_sfx !== (beat.audio_subtext || '')) {
                     updated.audio_subtext = scene.audio_sfx;
                 }
@@ -316,38 +312,76 @@ export function useChunkManager(deps: ChunkManagerDeps) {
             });
             const syncedBeatSheet = { ...chunk.beatSheet, beats: userSyncedBeats };
 
-            const { scenes: newScenes, visualDna } = await generatePromptsFromBeats(
-                syncedBeatSheet, epNum, language, latestAssets, globalStyle
+            let finalVisualDna = '';
+
+            // Robust Streaming Merge Logic
+            const result = await generatePromptsFromBeatsStream(
+                syncedBeatSheet, epNum, language, latestAssets, globalStyle,
+                (progressScenes, dna) => {
+                    if (dna) finalVisualDna = dna;
+                    
+                    setChunks(prev => prev.map(c => {
+                        if (c.id !== chunk.id) return c;
+                        
+                        const currentScenes = c.scenes || [];
+                        
+                        // Preserve all existing scenes, and merge updates from the stream.
+                        // If a scene is locally deleted by the user, it will be naturally excluded.
+                        const mergedProgress = currentScenes.map(old => {
+                            const ns = progressScenes.find(s => s.id === old.id);
+                            if (!ns) return old;
+                            
+                            // Deep merge for prompt_options (A/B/C variants)
+                            const mergedOptions = ns.prompt_options?.map(newOpt => {
+                                const oldOpt = old.prompt_options?.find(o => o.option_id === newOpt.option_id);
+                                if (!oldOpt) return newOpt;
+                                return {
+                                    ...newOpt,
+                                    // Preserve Assets at option level
+                                    imageUrl: oldOpt.imageUrl,
+                                    imageAssetId: oldOpt.imageAssetId,
+                                    videoUrl: oldOpt.videoUrl,
+                                    videoAssetId: oldOpt.videoAssetId,
+                                    videoAssetIds: oldOpt.videoAssetIds,
+                                    assetIds: oldOpt.assetIds,
+                                };
+                            });
+
+                            // Merge and Preserve from LIVE state
+                            return {
+                                ...ns,
+                                // Preserve Assets
+                                imageUrl: old.imageUrl,
+                                imageAssetId: old.imageAssetId,
+                                videoUrl: old.videoUrl,
+                                videoAssetId: old.videoAssetId,
+                                startEndVideoUrl: old.startEndVideoUrl,
+                                startEndVideoAssetId: old.startEndVideoAssetId,
+                                narrationAudioUrl: old.narrationAudioUrl,
+                                prompt_options: mergedOptions || old.prompt_options, 
+                                // Preserve Reference Settings
+                                assetIds: old.assetIds || ns.assetIds,
+                                videoAssetIds: old.videoAssetIds || ns.videoAssetIds,
+                                startEndAssetIds: old.startEndAssetIds || ns.startEndAssetIds,
+                                useAssets: old.useAssets !== undefined ? old.useAssets : ns.useAssets,
+                                isStartEndFrameMode: old.isStartEndFrameMode !== undefined ? old.isStartEndFrameMode : ns.isStartEndFrameMode,
+                                // Preserve User Context
+                                video_duration: old.video_duration || ns.video_duration,
+                                video_vfx: old.video_vfx || ns.video_vfx,
+                            };
+                        });
+
+                        return { ...c, scenes: mergedProgress, status: 'scripting' };
+                    }));
+                }
             );
 
-            // 更新全局 Visual DNA
-            if (visualDna) {
-                setGlobalStyle(prev => ({ ...prev, visualTags: visualDna }));
+            // Final Update: Sync Visual DNA ONLY if unlocked and empty
+            if (finalVisualDna && !globalStyle.visualDnaLocked && !globalStyle.visualTags) {
+                setGlobalStyle(prev => ({ ...prev, visualTags: finalVisualDna }));
             }
-
-            // Preserve existing storyboard images/videos by merging media fields from old scenes
-            const oldScenesMap = new Map(chunk.scenes.map(s => [s.id, s]));
-            const mergedScenes = newScenes.map(ns => {
-                const old = oldScenesMap.get(ns.id);
-                if (!old) return ns;
-                return {
-                    ...ns,
-                    // Carry over all media fields from the previous scene
-                    imageUrl: old.imageUrl,
-                    imageAssetId: old.imageAssetId,
-                    videoUrl: old.videoUrl,
-                    videoAssetId: old.videoAssetId,
-                    startEndVideoUrl: old.startEndVideoUrl,
-                    startEndVideoAssetId: old.startEndVideoAssetId,
-                    narrationAudioUrl: old.narrationAudioUrl,
-                    // 保留用户手动覆写的字段（用户填写 > Agent 3 生成）
-                    video_duration: old.video_duration || ns.video_duration,
-                    video_vfx: old.video_vfx || ns.video_vfx,
-                };
-            });
-
-            updateChunk(chunk.id, { scenes: mergedScenes, status: 'scripted' });
-            return mergedScenes;
+            updateChunk(chunk.id, { status: 'scripted' });
+            return result.scenes; // handleGeneratePromptsAction uses this!
         } finally {
             scriptingChunksRef.current.delete(chunk.id);
         }

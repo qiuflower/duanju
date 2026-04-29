@@ -9,8 +9,6 @@ interface SceneVideoPaneProps {
     labels: Translation;
     onUpdate: (id: string, field: keyof Scene, value: any) => void;
     hasImage: boolean;
-    useAssets: boolean;
-    setUseAssets: (v: boolean) => void;
     assets: Asset[];
     chapterScenes: Scene[];
     onRemoveAsset: (assetId: string, mode: 'image' | 'video') => void;
@@ -31,8 +29,6 @@ const SceneVideoPane: React.FC<SceneVideoPaneProps> = ({
     labels,
     onUpdate,
     hasImage,
-    useAssets,
-    setUseAssets,
     assets,
     chapterScenes,
     onRemoveAsset,
@@ -60,21 +56,6 @@ const SceneVideoPane: React.FC<SceneVideoPaneProps> = ({
                     <Video className="w-3 h-3" />
                     {labels.videoPromptLabel}
                 </h4>
-                <div className="flex items-center gap-2">
-                    <input
-                        type="checkbox"
-                        id={`useAssets-${scene.id}`}
-                        checked={useAssets}
-                        onChange={(e) => {
-                            setUseAssets(e.target.checked);
-                            onUpdate(scene.id, 'useAssets', e.target.checked);
-                        }}
-                        className="w-3 h-3 rounded border-gray-600 text-banana-500 focus:ring-banana-500/50 bg-gray-700"
-                    />
-                    <label htmlFor={`useAssets-${scene.id}`} className="text-[10px] text-gray-400 cursor-pointer select-none">
-                        Use Assets
-                    </label>
-                </div>
             </div>
 
             {/* Video Params Grid */}
@@ -171,9 +152,9 @@ const SceneVideoPane: React.FC<SceneVideoPaneProps> = ({
 
 
             <MentionTextarea
-                value={scene.video_prompt || scene.visual_desc || ''}
+                value={scene.video_prompt !== undefined ? scene.video_prompt : (scene.visual_desc || '')}
                 onChange={(val) => {
-                    if (scene.video_prompt) {
+                    if (scene.video_prompt !== undefined) {
                         onUpdate(scene.id, 'video_prompt', val);
                     } else {
                         onUpdate(scene.id, 'visual_desc', val);

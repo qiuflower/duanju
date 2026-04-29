@@ -24,12 +24,12 @@ router.post('/asset-image', async (req: Request, res: Response) => {
 // POST /api/media/scene-image
 router.post('/scene-image', async (req: Request, res: Response) => {
     try {
-        const { scene, globalStyle, assets } = req.body;
+        const { scene, globalStyle, assets, optionId } = req.body;
         if (!scene) {
             return res.status(400).json({ error: 'Missing required field: scene' });
         }
 
-        const result = await generateSceneImage(scene, globalStyle, assets || []);
+        const result = await generateSceneImage(scene, globalStyle, assets || [], optionId);
         res.json(result);
     } catch (e: any) {
         console.error('[Media/scene-image]', e);
@@ -40,18 +40,19 @@ router.post('/scene-image', async (req: Request, res: Response) => {
 // POST /api/media/video — Submit task, return immediately
 router.post('/video', async (req: Request, res: Response) => {
     try {
-        const { imageBase64, scene, aspectRatio, assets, globalStyle, allScenes } = req.body;
+        const { imageBase64, scene, aspectRatio, assets, globalStyle, allScenes, optionId } = req.body;
         if (!scene) {
             return res.status(400).json({ error: 'Missing required field: scene' });
         }
 
         const result = await submitVideoGeneration(
-            imageBase64 || '',
+            imageBase64,
             scene,
-            aspectRatio || '16:9',
+            aspectRatio,
             assets || [],
             globalStyle,
-            allScenes || []
+            allScenes,
+            optionId
         );
         res.json(result);
     } catch (e: any) {

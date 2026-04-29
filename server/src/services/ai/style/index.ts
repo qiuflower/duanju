@@ -9,14 +9,41 @@ import { MODELS } from "../model-manager";
 export const extractVisualDna = async (
     workStyle: string = '',
     textureStyle: string = '',
-    language: string = 'Chinese'
+    language: string = 'Chinese',
+    useOriginalCharacters: boolean = false,
+    images?: string[]
 ): Promise<string> => {
     try {
+        const parts: any[] = [];
+        
+        if (images && images.length > 0) {
+            images.forEach(img => {
+                const match = img.match(/^data:(image\/[a-zA-Z]+);base64,(.+)$/);
+                if (match) {
+                    parts.push({
+                        inlineData: {
+                            mimeType: match[1],
+                            data: match[2]
+                        }
+                    });
+                } else {
+                    parts.push({
+                        inlineData: {
+                            mimeType: "image/png",
+                            data: img
+                        }
+                    });
+                }
+            });
+        }
+        
+        parts.push({ text: "Analyze the visual style based on the provided style and texture references, as well as any provided images." });
+        
         const dnaResponse = await retryWithBackoff<GenerateContentResponse>(() => ai.models.generateContent({
             model: MODELS.TEXT_FAST,
-            contents: { parts: [{ text: "Analyze the visual style based on the provided style and texture references." }] },
+            contents: { parts },
             config: {
-                systemInstruction: PROMPTS.AGENT_A_DNA(workStyle, textureStyle, language),
+                systemInstruction: PROMPTS.AGENT_A_DNA(workStyle, textureStyle, language, useOriginalCharacters),
                 responseMimeType: "application/json",
                 responseSchema: { type: Type.OBJECT, properties: { visual_dna: { type: Type.STRING } } }
             }

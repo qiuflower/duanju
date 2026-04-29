@@ -16,6 +16,7 @@ const agent2Schema = {
             type: Type.OBJECT,
             properties: {
                 core_atmosphere: { type: Type.STRING },
+                spatial_setup: { type: Type.STRING },
                 key_lens_design: {
                     type: Type.OBJECT,
                     properties: {
@@ -39,11 +40,10 @@ const agent2Schema = {
                     audio_subtext: { type: Type.STRING },
                     asset_ids: { type: Type.ARRAY, items: { type: Type.STRING } },
                     narrative_function: { type: Type.STRING },
-                    cause_from: { type: Type.STRING },
-                    emotional_intensity: { type: Type.NUMBER },
-                    duration: { type: Type.STRING }
+                    spatial_pos: { type: Type.STRING },
+                    emotional_intensity: { type: Type.NUMBER }
                 },
-                required: ["beat_id", "shot_id", "visual_action", "camera_movement", "lighting", "audio_subtext", "narrative_function", "cause_from", "emotional_intensity"]
+                required: ["beat_id", "shot_id", "visual_action", "camera_movement", "lighting", "audio_subtext", "narrative_function", "emotional_intensity"]
             }
         }
     },
@@ -83,35 +83,59 @@ function parseAgent2Response(responseText: string | undefined): MasterBeatSheet 
     });
 
     return {
-        visual_strategy: result.visual_strategy || { core_atmosphere: "", key_lens_design: { opening_hook: "", metaphor: "" } },
+        visual_strategy: result.visual_strategy || { core_atmosphere: "", spatial_setup: "", key_lens_design: { opening_hook: "", metaphor: "" } },
         beats
     };
 }
 
+
+
 /**
- * 标注模式：为预分段片段添加镜头标注 (1:1 剧本还原)
+ * 标注模式：全能导演模式 2.3 (原生符号刚性切分 + LLM 纯填空)
  */
 export const runAgent2_Annotation = async (
-    segments: ScriptSegment[],
+    rawScript: string,
     language: string,
-    lensLibraryPrompt: string
+    lensLibraryPrompt: string,
+    visualDna: string = "",
+    narrativeContext: string = ""
 ): Promise<MasterBeatSheet> => {
-    const beatCount = countBeatSegments(segments);
-    const formattedSegments = formatSegmentsForAnnotation(segments);
 
-    const sysPrompt = PROMPTS.AGENT_2_ANNOTATE(language, lensLibraryPrompt, beatCount);
+    // 1. Programmatic splitting by "△"
+    const chunks = rawScript.split('△');
+    const setupContext = chunks[0].trim(); 
+    const beatTexts: string[] = [];
+    for (let i = 1; i < chunks.length; i++) {
+        if (chunks[i].trim().length > 0) {
+            beatTexts.push('△' + chunks[i]); 
+        }
+    }
 
-    console.log(`[Agent2/Annotate] ${segments.length} segments → ${beatCount} beats expected`);
+    if (beatTexts.length === 0) {
+        throw new Error(`[Agent2/PureDirector] Validation failed: No '△' found in script.`);
+    }
+
+    // 2. Format input for LLM
+    let llmInput = `**已切分的分镜列表 (共 ${beatTexts.length} 个)**:\n`;
+    beatTexts.forEach((text, index) => {
+        const beatId = `S${String(index + 1).padStart(2, '0')}`;
+        llmInput += `[Beat ${beatId}]\n${text.trim()}\n\n`;
+    });
+
+    const enhancedNarrativeContext = narrativeContext ? `${narrativeContext}\n\n[前情摘要]: ${setupContext}` : `[前情摘要]: ${setupContext}`;
+    const sysPrompt = PROMPTS.AGENT_2_ANNOTATE(language, lensLibraryPrompt, visualDna, enhancedNarrativeContext);
+
+    console.log(`[Agent2/PureDirector] Pre-sliced into ${beatTexts.length} beats. Requesting LLM parameters...`);
 
     for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
         try {
             if (attempt > 1) {
-                console.warn(`[Agent2/Annotate][Retry ${attempt}/${MAX_RETRIES}] Retrying annotation...`);
+                console.warn(`[Agent2/PureDirector][Retry ${attempt}/${MAX_RETRIES}] Retrying...`);
             }
 
             const response = await retryWithBackoff<GenerateContentResponse>(() => ai.models.generateContent({
                 model: MODELS.TEXT_FAST,
-                contents: { parts: [{ text: `以下是已拆分好的 ${beatCount} 个剧本片段。请为每个片段标注镜头语言。\n⚠️ 必须输出恰好 ${beatCount} 个 beats，禁止合并或删除！\n\n${formattedSegments}` }] },
+                contents: { parts: [{ text: `我已经使用代码完成了确切切分。下面是 ${beatTexts.length} 个以 S01 开头编号的分镜文本。请你直接输出对应这些 beat_id 的导演指令 JSON 格式参数（切勿重新输出或修改 raw_text）：\n\n${llmInput}` }] },
                 config: {
                     systemInstruction: sysPrompt,
                     responseMimeType: "application/json",
@@ -121,52 +145,62 @@ export const runAgent2_Annotation = async (
 
             const result = parseAgent2Response(response.text);
 
-            // 标注模式校验：输出 beat 数应接近预期
-            if (result.beats.length < beatCount * 0.7) {
-                console.warn(`[Agent2/Annotate] Expected ${beatCount} beats but got ${result.beats.length}. Retrying...`);
-                throw new Error(`Beat count mismatch: expected ~${beatCount}, got ${result.beats.length}`);
-            }
+            // 3. Programmatic Merge: Inject the locked raw texts back into the JSON output
+            result.beats = result.beats.map((beat) => {
+                const match = beat.beat_id.match(/S?0*(\d+)/);
+                const num = match ? parseInt(match[1], 10) : 0;
+                const index = num - 1;
+                
+                const cleanRaw = (index >= 0 && index < beatTexts.length) ? beatTexts[index].trim() : '';
+                beat.raw_text = cleanRaw;
+                
+                let addon = beat.visual_action || '';
+                addon = addon.split(cleanRaw).join(''); 
+                addon = addon.replace(/原文内容:|\[画面补充\]:|\[场景.*?\]|【场景.*?】/g, '').trim();
 
-            // 【终极完美方案】：程序化硬接驳场景上下文
-            // 无论大模型是否乖乖听话把场景写进了 visual_action，我们都在代码层将其强制合并！
-            const beatSegments = segments.filter(s => s.type !== 'transition' && s.type !== 'scene_header');
-            const segmentMap = new Map<string, ScriptSegment>();
-            beatSegments.forEach((seg, idx) => {
-                const sid = `S${String(idx + 1).padStart(2, '0')}`;
-                segmentMap.set(sid, seg);
-            });
-
-            result.beats = result.beats.map(beat => {
-                const seg = segmentMap.get(beat.beat_id);
-                if (seg) {
-                    const ctxString = seg.scene_context ? `【环境位置：${seg.scene_context.trim()}】\n` : '';
-                    let addon = beat.visual_action || '';
-
-                    // 防呆处理：去除大模型可能手欠带出的环境名或原文残留
-                    // 评审修复：禁止将不受信的 scene_context 直接传入 new RegExp，防止包含()等字符导致死循环或崩溃
-                    if (seg.scene_context) {
-                        addon = addon.split(seg.scene_context.trim()).join('');
-                        addon = addon.replace(/【环境位置.*?】/g, '');
-                    }
-                    addon = addon.split(seg.raw_text).join(''); // 安全全量替换原文纯文本
-                    addon = addon.replace(/原文内容:|\[画面补充\]:|\[场景.*?\]|【场景.*?】/g, '').trim();
-
-                    beat.visual_action = `${ctxString}原文内容：${seg.raw_text}\n[画面补充]：${addon || '无'}`;
-                }
+                beat.visual_action = `原文内容：${cleanRaw}\n[画面补充]：${addon || '无'}`;
                 return beat;
             });
 
-            console.log(`[Agent2/Annotate] Success: ${result.beats.length} beats generated (expected ${beatCount}), applied deterministic scene context mapping.`);
+            // Fallback validation: Did LLM drop beats?
+            if (result.beats.length < beatTexts.length * 0.8 && result.beats.length > 0) {
+                console.warn(`[Agent2] LLM returned ${result.beats.length} beats but we expected ${beatTexts.length}. We will pad the missing beats with empty parameters.`);
+                // We should ideally generate defaults for missing beats, but throwing might cause infinite retry loops if LLM simply gives up on massive batches.
+                // Let's pad missing beats mechanically to ensure strict parity.
+                const validBeatsDict = new Map<string, any>();
+                result.beats.forEach(b => validBeatsDict.set(b.beat_id, b));
+                
+                result.beats = beatTexts.map((text, idx) => {
+                    const beatId = `S${String(idx + 1).padStart(2, '0')}`;
+                    if (validBeatsDict.has(beatId)) {
+                        return validBeatsDict.get(beatId);
+                    }
+                    return {
+                        beat_id: beatId,
+                        raw_text: text.trim(),
+                        shot_id: beatId,
+                        shot_name: "Follow-up Shot",
+                        visual_action: `原文内容：${text.trim()}\n[画面补充]：无`,
+                        camera_movement: "Fixed",
+                        lighting: "Natural lighting",
+                        audio_subtext: "Ambient sound",
+                        narrative_function: "Tension",
+                        emotional_intensity: 5
+                    };
+                });
+            }
+
+            console.log(`[Agent2/PureDirector] Success: Emitted ${result.beats.length} beats. Text integrity preserved programmatically.`);
             return result;
         } catch (e: any) {
-            console.error(`[Agent2/Annotate][Retry ${attempt}/${MAX_RETRIES}] failed:`, e?.message || e);
+            console.error(`[Agent2/PureDirector][Retry ${attempt}/${MAX_RETRIES}] failed:`, e?.message || e);
             if (attempt >= MAX_RETRIES) {
-                throw new Error(`[Agent2/Annotate] Failed after ${MAX_RETRIES} retries: ${e?.message || e}`);
+                throw new Error(`[Agent2/PureDirector] Failed after ${MAX_RETRIES} retries: ${e?.message || e}`);
             }
             await wait(Math.pow(2, attempt) * 2000);
         }
     }
 
-    throw new Error(`[Agent2/Annotate] Exhausted all retries.`);
+    throw new Error(`[Agent2/PureDirector] Exhausted all retries.`);
 };
 

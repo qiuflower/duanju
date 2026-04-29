@@ -1,5 +1,5 @@
 import { Router, Request, Response } from 'express';
-import { analyzeNarrative, generateBeatSheet, generatePromptsFromBeats, generateEpisodeScenes } from '../services/ai/agents/pipeline';
+import { analyzeNarrative, generateBeatSheet, generatePromptsFromBeats, generatePromptsFromBeatsStream, generateEpisodeScenes } from '../services/ai/agents/pipeline';
 
 const router = Router();
 
@@ -66,6 +66,72 @@ router.post('/prompts', async (req: Request, res: Response) => {
     } catch (e: any) {
         console.error('[Pipeline/prompts]', e);
         res.status(500).json({ error: e?.message || 'Internal error' });
+    }
+});
+
+// POST /api/pipeline/retry-single-beat
+router.post('/retry-single-beat', async (req: Request, res: Response) => {
+    try {
+        const { beat, episodeNumber, language, style, assets } = req.body;
+        if (!beat || !language || !style) {
+            return res.status(400).json({ error: 'Missing required fields: beat, language, style' });
+        }
+
+        const beatSheet = {
+            beats: [beat],
+            summary: "Single beat regeneration"
+        };
+
+        const result = await generatePromptsFromBeats(
+            beatSheet as any,
+            episodeNumber || 0,
+            language,
+            assets || [],
+            style
+        );
+
+        if (result.scenes && result.scenes.length > 0) {
+            res.json({ scene: result.scenes[0] });
+        } else {
+            res.status(500).json({ error: "Failed to regenerate beat" });
+        }
+    } catch (e: any) {
+        console.error('[Pipeline/retry-single-beat]', e);
+        res.status(500).json({ error: e?.message || 'Internal error' });
+    }
+});
+
+// POST /api/pipeline/prompts-stream
+router.post('/prompts-stream', async (req: Request, res: Response) => {
+    try {
+        const { beatSheet, episodeNumber, language, assets, style } = req.body;
+        if (!beatSheet || !language || !style) {
+            return res.status(400).json({ error: 'Missing required fields: beatSheet, language, style' });
+        }
+
+        res.setHeader('Content-Type', 'application/x-ndjson');
+        res.setHeader('Transfer-Encoding', 'chunked');
+
+        const generator = generatePromptsFromBeatsStream(
+            beatSheet,
+            episodeNumber || 0,
+            language,
+            assets || [],
+            style
+        );
+
+        for await (const chunk of generator) {
+            res.write(JSON.stringify({ type: 'chunk', ...chunk }) + '\n');
+        }
+        res.end();
+    } catch (e: any) {
+        console.error('[Pipeline/prompts-stream]', e);
+        if (!res.headersSent) {
+            res.status(500).json({ error: e?.message || 'Internal error' });
+        } else {
+            res.write(JSON.stringify({ type: 'error', error: e?.message || 'Internal error' }) + '\n');
+            res.end();
+        }
     }
 });
 

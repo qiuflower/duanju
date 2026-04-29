@@ -7,7 +7,7 @@ export type ProviderType = "polo" | "t8star";
 export const MODELS = {
   TEXT_FAST: 'gemini-3.1-flash-lite-preview-thinking-high',
   TEXT_AGENT: 'gemini-3.1-flash-lite-preview-thinking-high',
-  IMAGE_GEN: 'gemini-3.1-flash-image-preview-2k',
+  IMAGE_GEN: 'gpt-image-2',
   IMAGE_POLO_OVERRIDE: 'gemini-3-pro-image-preview',
   TTS: 'tts-1-hd-1106',
 } as const;
@@ -16,12 +16,22 @@ export interface ModelConfig {
   textmodel: ProviderType;
   imagemodel: ProviderType;
   videomodel: ProviderType;
+  t8starImageModel?: string;
+  t8starImageSize?: string;
+  t8starImageQuality?: string;
+  t8starNanoImageSize?: string;
+  t8starNanoAspectRatio?: string;
 }
 
 const DEFAULT_CONFIG: ModelConfig = {
   textmodel: "t8star",
   imagemodel: "t8star",
   videomodel: "t8star",
+  t8starImageModel: "gpt-image-2",
+  t8starImageSize: "auto",
+  t8starImageQuality: "auto",
+  t8starNanoImageSize: "2K",
+  t8starNanoAspectRatio: "16:9",
 };
 
 const VALID_PROVIDERS: ProviderType[] = ["polo", "t8star"];
@@ -36,6 +46,13 @@ class ModelManager {
 
   constructor() {
     this.config = this.loadConfig();
+    
+    // Sync to backend immediately on load (important if backend restarted causing lost state)
+    if (typeof window !== "undefined") {
+      setTimeout(() => {
+        this.setConfig(this.config);
+      }, 500);
+    }
   }
 
   private loadConfig(): ModelConfig {
@@ -50,6 +67,11 @@ class ModelManager {
           validated[key] = parsed[key];
         }
       }
+        validated.t8starImageModel = parsed.t8starImageModel || "gpt-image-2";
+        validated.t8starImageSize = parsed.t8starImageSize || "auto";
+        validated.t8starImageQuality = parsed.t8starImageQuality || "auto";
+        validated.t8starNanoImageSize = parsed.t8starNanoImageSize || "2K";
+        validated.t8starNanoAspectRatio = parsed.t8starNanoAspectRatio || "16:9";
       return validated;
     } catch {
       return DEFAULT_CONFIG;

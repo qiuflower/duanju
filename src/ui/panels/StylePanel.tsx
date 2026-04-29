@@ -1,8 +1,8 @@
 import React, { useState, useRef } from 'react';
 import { GlobalStyle, StyleSetting } from '@/shared/types';
 import { Translation } from '@/services/i18n/translations';
-import { Info, RectangleHorizontal, RectangleVertical, Mic, Volume2, Upload, X, Sparkles, Image as ImageIcon } from 'lucide-react';
-import { VOICE_OPTIONS, generateSpeech, pcmToWav, analyzeVisualStyleFromImages } from '@/services/ai';
+import { Info, RectangleHorizontal, RectangleVertical, Mic, Volume2, Upload, X, Sparkles, Image as ImageIcon, Lock, Unlock } from 'lucide-react';
+import { VOICE_OPTIONS, generateSpeech, pcmToWav, analyzeVisualStyleFromImages, extractVisualDna } from '@/services/ai';
 
 interface StylePanelProps {
     styleState: GlobalStyle;
@@ -19,7 +19,64 @@ const StylePanel: React.FC<StylePanelProps> = ({ styleState, onStyleChange, labe
     // Image Upload State
     const [uploadImages, setUploadImages] = useState<string[]>([]);
     const [isAnalyzing, setIsAnalyzing] = useState(false);
+    const [isLocking, setIsLocking] = useState(false);
+    const [draftTags, setDraftTags] = useState<string | null>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
+
+    const is1to1 = Boolean(styleState.work?.useOriginalCharacters && (styleState.work?.custom || (styleState.work?.selected !== 'None' ? styleState.work?.selected : '')));
+
+    const handleGenerateDna = async () => {
+        if (styleState.visualDnaLocked) return;
+        setIsLocking(true);
+        try {
+            const workName = styleState.work?.custom || (styleState.work?.selected !== 'None' ? styleState.work?.selected : '') || '';
+
+            if (is1to1 && workName) {
+                // If 1:1 is checked, bypass LLM and exclusively use the Work Name
+                setDraftTags(`[《${workName}》风格], `);
+            } else {
+                let currentTexture = styleState.texture?.custom || (styleState.texture?.selected !== 'None' ? styleState.texture?.selected : '') || '';
+
+                const res = await extractVisualDna(
+                    workName,
+                    currentTexture,
+                    language || 'Chinese',
+                    is1to1,
+                    uploadImages.length > 0 ? uploadImages : undefined
+                );
+                setDraftTags(res.dna || (typeof res === 'string' ? res : ''));
+            }
+        } catch (e) {
+            console.error("Locking DNA failed", e);
+            alert("提取失败 / Extraction failed");
+        } finally {
+            setIsLocking(false);
+        }
+    };
+
+    const confirmLock = () => {
+        if (!draftTags) return;
+        onStyleChange({
+            ...styleState,
+            visualTags: draftTags,
+            visualDnaLocked: true
+        });
+        setDraftTags(null);
+    };
+
+    const cancelDraft = () => {
+        setDraftTags(null);
+    };
+
+    const handleUnlockStyle = () => {
+        if (window.confirm(language === "Chinese" ? "解锁将允许您修改全局风格，但也可能导致后续分镜与之前画风不一致。是否继续？" : "Unlocking allows changing global style, but may cause inconsistencies with already generated assets. Continue?")) {
+            onStyleChange({
+                ...styleState,
+                visualTags: '',
+                visualDnaLocked: false
+            });
+        }
+    };
 
     const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
         const files = e.target.files;
@@ -47,8 +104,6 @@ const StylePanel: React.FC<StylePanelProps> = ({ styleState, onStyleChange, labe
     const removeImage = (index: number) => {
         setUploadImages(prev => prev.filter((_, i) => i !== index));
     };
-
-    const is1to1 = styleState.work?.useOriginalCharacters && (styleState.work?.custom || (styleState.work?.selected !== 'None' ? styleState.work?.selected : ''));
 
     const handleAnalyzeImages = async () => {
         if (uploadImages.length === 0 || is1to1) return;
@@ -85,6 +140,7 @@ const StylePanel: React.FC<StylePanelProps> = ({ styleState, onStyleChange, labe
         // 当修改参考作品或画面质感时，清除缓存的 Visual DNA，强制下次重新生成
         if (type === 'work' || type === 'texture') {
             updated.visualTags = '';
+            updated.visualDnaLocked = false;
         }
         onStyleChange(updated);
     };
@@ -143,18 +199,19 @@ const StylePanel: React.FC<StylePanelProps> = ({ styleState, onStyleChange, labe
                     {/* Custom Input */}
                     <input
                         type="text"
-                        placeholder={placeholder}
+                        placeholder={type === 'texture' && is1to1 ? (language === 'Chinese' ? '1:1还原模式下无法叠加画面质感' : 'Texture input disabled in 1:1 Restore mode') : placeholder}
                         value={current.custom || ''}
                         onChange={(e) => updateSetting(type, 'custom', e.target.value)}
-                        className="w-full bg-black/40 text-sm text-banana-100 placeholder-gray-600 p-2 rounded border border-white/10 focus:border-banana-500/50 outline-none"
+                        className="w-full bg-black/40 text-sm text-banana-100 placeholder-gray-600 p-2 rounded border border-white/10 focus:border-banana-500/50 outline-none disabled:opacity-50 disabled:cursor-not-allowed"
+                        disabled={styleState.visualDnaLocked || (type === 'texture' && is1to1)}
                     />
 
                     {/* Dropdown Selector */}
                     <select
                         value={current.selected}
                         onChange={(e) => updateSetting(type, 'selected', e.target.value)}
-                        className="w-full bg-black/30 text-sm text-gray-400 p-2 rounded border border-white/10 focus:border-banana-500/50 outline-none"
-                        disabled={!!current.custom}
+                        className="w-full bg-black/30 text-sm text-gray-400 p-2 rounded border border-white/10 focus:border-banana-500/50 outline-none disabled:opacity-50 disabled:cursor-not-allowed"
+                        disabled={!!current.custom || styleState.visualDnaLocked || (type === 'texture' && is1to1)}
                     >
                         <option value="None">{labels.none}</option>
                         {current.options.map((opt, i) => (
@@ -162,7 +219,6 @@ const StylePanel: React.FC<StylePanelProps> = ({ styleState, onStyleChange, labe
                         ))}
                     </select>
 
-                    {/* Slider */}
                     <div className="flex items-center gap-3 mt-1">
                         <span className="text-[10px] text-gray-500 uppercase">{labels.strength}</span>
                         <input
@@ -172,95 +228,46 @@ const StylePanel: React.FC<StylePanelProps> = ({ styleState, onStyleChange, labe
                             step="1"
                             value={current.strength}
                             onChange={(e) => updateSetting(type, 'strength', parseInt(e.target.value))}
-                            className="flex-1 accent-banana-500 h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer"
+                            className="flex-1 accent-banana-500 h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                            disabled={styleState.visualDnaLocked}
                         />
                         <span className="text-xs font-mono w-4 text-right">{current.strength}</span>
                     </div>
-
-                    {/* Checkbox for Reference Work only */}
-                    {type === 'work' && (
-                        <div className="flex items-center gap-2 mt-2 pt-2 border-t border-white/5">
-                            <input
-                                type="checkbox"
-                                id="useOriginalCharacters"
-                                checked={current.useOriginalCharacters || false}
-                                onChange={(e) => updateSetting(type, 'useOriginalCharacters', e.target.checked)}
-                                className="w-3.5 h-3.5 rounded border-gray-600 text-banana-500 focus:ring-banana-500 bg-gray-700/50 cursor-pointer accent-banana-500"
-                            />
-                            <label htmlFor="useOriginalCharacters" className="text-xs text-gray-400 select-none cursor-pointer hover:text-banana-400 transition-colors">
-                                {language === 'Chinese' ? '影视剧人物/场景/物品1:1还原' : '1:1 Restore Characters/Scenes/Items'}
-                            </label>
-                            <div className="group relative ml-1">
-                                <Info className="w-3 h-3 text-gray-600 cursor-help" />
-                                <div className="absolute left-0 bottom-full mb-2 w-48 bg-black/90 text-gray-300 text-[10px] p-2 rounded hidden group-hover:block z-50 pointer-events-none">
-                                    {language === 'Chinese'
-                                        ? '若勾选，系统会自动识别剧本中出现的角色、场景及物品，并在生成资产时自动添加"影视剧《作品名》... 1:1还原"及原影视造型的提示词。'
-                                        : 'If checked, system will detect characters, scenes, and items, and append "Movie/TV Series《Work》... 1:1 Restore" and original film/TV styling details to asset prompts.'}
-                                </div>
-                            </div>
-                        </div>
-                    )}
                 </div>
-
-                {/* Image Upload for Texture */}
-                {type === 'texture' && (
-                    <div className="mt-4 pt-4 border-t border-white/5">
-                        <div className="flex items-center justify-between mb-2">
-                            <span className="text-xs text-gray-400 font-medium flex items-center gap-1">
-                                <ImageIcon className="w-3 h-3" />
-                                Style Ref ({uploadImages.length}/10)
-                            </span>
-                            {uploadImages.length > 0 && (
-                                <button
-                                    onClick={handleAnalyzeImages}
-                                    disabled={isAnalyzing || !!is1to1}
-                                    className="flex items-center gap-1 text-[10px] bg-banana-500 text-black px-2 py-1 rounded hover:bg-banana-400 transition-colors disabled:opacity-50"
-                                    title={is1to1 ? (language === 'Chinese' ? '1:1还原模式下无需分析图片' : 'Image analysis disabled in 1:1 Restore mode') : ''}
-                                >
-                                    {isAnalyzing ? <div className="w-3 h-3 border-2 border-black/30 border-t-black rounded-full animate-spin" /> : <Sparkles className="w-3 h-3" />}
-                                    Analyze
-                                </button>
-                            )}
-                        </div>
-
-                        <div className="grid grid-cols-5 gap-2 mb-2">
-                            {uploadImages.map((img, idx) => (
-                                <div key={idx} className="relative aspect-square rounded overflow-hidden group border border-white/10">
-                                    <img src={img} alt="ref" className="w-full h-full object-cover" />
-                                    <button
-                                        onClick={() => removeImage(idx)}
-                                        className="absolute top-0 right-0 p-0.5 bg-black/60 text-white opacity-0 group-hover:opacity-100 transition-opacity rounded-bl"
-                                    >
-                                        <X className="w-3 h-3" />
-                                    </button>
-                                </div>
-                            ))}
-                            {uploadImages.length < 10 && (
-                                <button
-                                    onClick={() => fileInputRef.current?.click()}
-                                    className="aspect-square rounded border border-dashed border-white/20 flex items-center justify-center hover:border-banana-500/50 hover:bg-white/5 transition-colors"
-                                    title="Upload Reference Image"
-                                >
-                                    <Upload className="w-4 h-4 text-gray-500" />
-                                </button>
-                            )}
-                        </div>
-                        <input
-                            type="file"
-                            ref={fileInputRef}
-                            className="hidden"
-                            accept="image/*"
-                            multiple
-                            onChange={handleImageUpload}
-                        />
-                    </div>
-                )}
             </div>
         );
     };
 
     return (
         <div className="flex flex-col h-full bg-dark-800 border-x border-b border-white/10 rounded-b-xl overflow-hidden shadow-xl p-4 space-y-4 overflow-y-auto">
+            {/* Locked Status Banner */}
+            {styleState.visualDnaLocked && (
+                <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-lg p-3 flex flex-col gap-2 shadow-[0_0_15px_rgba(234,179,8,0.1)]">
+                    <div className="flex items-start gap-2">
+                        <Lock className="w-4 h-4 text-yellow-500 mt-0.5 shrink-0" />
+                        <div>
+                            <p className="text-xs text-yellow-200 font-medium leading-relaxed">
+                                {language === 'Chinese' ? '全局视觉风格已锁定。为保证全片画风一致，当前设置已不可更改。' : 'Global visual style is locked to ensure consistency.'}
+                            </p>
+                            <button onClick={handleUnlockStyle} className="mt-2 text-[10px] flex items-center justify-center gap-1 text-yellow-500/50 hover:text-yellow-500 transition-colors underline">
+                                <Unlock className="w-3 h-3" />
+                                {language === 'Chinese' ? '强行解锁（不推荐）' : 'Force Unlock (Not Recommended)'}
+                            </button>
+                        </div>
+                    </div>
+                    {styleState.visualTags && (
+                        <div className="mt-1 pt-2 border-t border-yellow-500/20">
+                            <span className="text-[10px] text-yellow-500/70 block mb-1">
+                                {language === 'Chinese' ? '当前固化的视觉基因 (DNA):' : 'Locked Visual DNA:'}
+                            </span>
+                            <div className="bg-black/60 rounded p-2 text-xs font-mono text-yellow-100/90 break-all border border-yellow-500/20 shadow-inner">
+                                {styleState.visualTags}
+                            </div>
+                        </div>
+                    )}
+                </div>
+            )}
+
             {/* Aspect Ratio Selector */}
             <div className="bg-white/5 rounded-lg p-4 border border-white/5 hover:border-banana-500/20 transition-all">
                 <div className="flex items-center gap-2 mb-3">
@@ -326,8 +333,190 @@ const StylePanel: React.FC<StylePanelProps> = ({ styleState, onStyleChange, labe
             </div>
 
             {renderSection('director', labels.directorStyle, labels.directorHint, styleState.director, labels.customPlaceholder)}
-            {renderSection('work', labels.workStyle, labels.workHint, styleState.work, labels.customPlaceholder)}
-            {renderSection('texture', labels.textureStyle, labels.textureHint, styleState.texture, labels.customPlaceholder)}
+
+            {/* Unified Visual DNA Block */}
+            <div className="bg-white/5 rounded-lg p-4 border border-white/5 hover:border-banana-500/20 transition-all shadow-[0_0_15px_rgba(255,255,255,0.01)]">
+                <div className="flex items-center justify-between gap-2 mb-4">
+                    <h2 className="font-extrabold text-banana-400 text-[15px] tracking-wide flex items-center gap-2">
+                        <Sparkles className="w-4 h-4 text-banana-400" />
+                        {language === 'Chinese' ? '视觉基因' : 'Visual DNA'}
+                    </h2>
+                </div>
+
+                {/* 1. 参考作品 (Reference Work) */}
+                <div className="mb-4 pb-4 border-b border-white/5">
+                    <div className="flex items-center gap-2 mb-2">
+                        <span className="text-xs font-bold text-gray-300">{labels.workStyle}</span>
+                        <div className="group relative">
+                            <Info className="w-3 h-3 text-gray-600 cursor-help hover:text-gray-400 transition-colors" />
+                            <div className="absolute left-0 bottom-full mb-2 w-48 bg-black/95 border border-white/10 text-gray-300 text-[10px] p-2 rounded hidden group-hover:block z-50 pointer-events-none shadow-xl">
+                                {labels.workHint}
+                            </div>
+                        </div>
+                    </div>
+                    <div className="grid grid-cols-1 gap-3">
+                        <input
+                            type="text"
+                            placeholder={labels.customPlaceholder}
+                            value={styleState.work.custom || ''}
+                            onChange={(e) => updateSetting('work', 'custom', e.target.value)}
+                            className="w-full bg-black/40 text-sm text-banana-100 placeholder-gray-600 p-2 rounded border border-white/10 focus:border-banana-500/50 outline-none disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                            disabled={styleState.visualDnaLocked}
+                        />
+                        <select
+                            value={styleState.work.selected}
+                            onChange={(e) => updateSetting('work', 'selected', e.target.value)}
+                            className="w-full bg-black/30 text-sm text-gray-400 p-2 rounded border border-white/10 focus:border-banana-500/50 outline-none disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                            disabled={!!styleState.work.custom || styleState.visualDnaLocked}
+                        >
+                            <option value="None">{labels.none}</option>
+                            {styleState.work.options.map((opt, i) => (
+                                <option key={i} value={opt}>{opt}</option>
+                            ))}
+                        </select>
+                        <div className="flex items-center gap-3 mt-1">
+                            <span className="text-[10px] text-gray-500 uppercase">{labels.strength}</span>
+                            <input
+                                type="range"
+                                min="1"
+                                max="10"
+                                step="1"
+                                value={styleState.work.strength}
+                                onChange={(e) => updateSetting('work', 'strength', parseInt(e.target.value))}
+                                className="flex-1 accent-banana-500 h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                                disabled={styleState.visualDnaLocked}
+                            />
+                            <span className="text-xs font-mono w-4 text-right text-gray-400">{styleState.work.strength}</span>
+                        </div>
+                        <div className="flex items-center gap-2 mt-2 pt-2 border-t border-white/5">
+                            <input
+                                type="checkbox"
+                                id="useOriginalCharacters"
+                                checked={styleState.work.useOriginalCharacters || false}
+                                onChange={(e) => updateSetting('work', 'useOriginalCharacters', e.target.checked)}
+                                className="w-3.5 h-3.5 rounded border-gray-600 text-banana-500 focus:ring-banana-500 bg-gray-800 cursor-pointer accent-banana-500 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+                                disabled={styleState.visualDnaLocked}
+                            />
+                            <label htmlFor="useOriginalCharacters" className="text-xs text-gray-400 select-none cursor-pointer hover:text-banana-400 transition-colors">
+                                {language === 'Chinese' ? '影视剧人物/场景/物品1:1还原' : '1:1 Restore Characters/Scenes/Items'}
+                            </label>
+                            <div className="group relative ml-auto mr-1">
+                                <Info className="w-3 h-3 text-gray-600 cursor-help hover:text-gray-400 transition-colors" />
+                                <div className="absolute right-0 bottom-full mb-2 w-56 bg-black/95 border border-white/10 text-gray-300 text-[10px] p-2.5 rounded hidden group-hover:block z-50 pointer-events-none shadow-xl leading-relaxed">
+                                    {language === 'Chinese'
+                                        ? '若勾选，系统会自动识别并套用原剧的视觉特征公式（例如衣服款式、色带、标志物），直接物理覆盖大模型的自由生成。由于画风会严重冲突，此模式下不再允许混合“画面质感”。'
+                                        : 'If checked, system detects characters and injects original film/TV visual DNA directly. Due to high style conflicts, "Texture" blending is physically disabled in this mode.'}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                {/* 2. 画面质感 (Texture) - Image Upload Only */}
+                <div>
+                    <div className="flex items-center gap-2 mb-2">
+                        <span className="text-xs font-bold text-gray-300">{labels.textureStyle}</span>
+                        <div className="group relative">
+                            <Info className="w-3 h-3 text-gray-600 cursor-help hover:text-gray-400 transition-colors" />
+                            <div className="absolute left-0 bottom-full mb-2 w-48 bg-black/95 border border-white/10 text-gray-300 text-[10px] p-2 rounded hidden group-hover:block z-50 pointer-events-none shadow-xl">
+                                {language === 'Chinese' ? '上传参考图以让模型直接提取质感DNA（1:1还原模式下将被禁用，防止风格污染）' : 'Upload reference images for texture extraction (disabled in 1:1 restore mode to prevent contamination).'}
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div className="flex items-center justify-between mb-2 mt-2">
+                        <span className="text-[10px] text-gray-500 font-medium flex items-center gap-1">
+                            <ImageIcon className="w-3 h-3" />
+                            Style Ref ({uploadImages.length}/10)
+                        </span>
+                    </div>
+
+                    <div className={`grid grid-cols-5 gap-2 transition-opacity ${is1to1 ? 'opacity-30 pointer-events-none grayscale' : ''}`}>
+                        {uploadImages.map((img, idx) => (
+                            <div key={idx} className="relative aspect-square rounded overflow-hidden group border border-white/10">
+                                <img src={img} alt="ref" className="w-full h-full object-cover" />
+                                <button
+                                    onClick={() => removeImage(idx)}
+                                    className="absolute top-0 right-0 p-0.5 bg-black/60 text-white opacity-0 group-hover:opacity-100 transition-opacity rounded-bl"
+                                    disabled={styleState.visualDnaLocked}
+                                >
+                                    <X className="w-3 h-3" />
+                                </button>
+                            </div>
+                        ))}
+                        {uploadImages.length < 10 && (
+                            <button
+                                onClick={() => fileInputRef.current?.click()}
+                                disabled={is1to1 || styleState.visualDnaLocked}
+                                className="aspect-square rounded border border-dashed border-white/20 flex items-center justify-center hover:border-banana-500/50 hover:bg-white/5 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                                title={is1to1 ? (language === 'Chinese' ? '1:1还原模式下禁传质感图' : 'Disabled in 1:1 Restore') : (language === 'Chinese' ? '上传参考图' : 'Upload Reference Image')}
+                            >
+                                <Upload className="w-4 h-4 text-gray-500" />
+                            </button>
+                        )}
+                    </div>
+                    <input
+                        type="file"
+                        ref={fileInputRef}
+                        className="hidden"
+                        accept="image/*"
+                        multiple
+                        onChange={handleImageUpload}
+                        disabled={is1to1 || styleState.visualDnaLocked}
+                    />
+                </div>
+
+                {/* Draft DNA Review Block */}
+                {draftTags !== null && !styleState.visualDnaLocked && (
+                    <div className="bg-banana-500/10 border border-banana-500/30 rounded-lg p-3 flex flex-col gap-2 shadow-[0_0_15px_rgba(234,179,8,0.05)] mt-4">
+                        <div className="flex items-start gap-2">
+                            <Sparkles className="w-4 h-4 text-banana-400 mt-0.5 shrink-0" />
+                            <div className="flex-1">
+                                <p className="text-xs text-banana-200 font-medium">
+                                    {language === 'Chinese' ? '视觉基因 (DNA) 已生成，请确认：' : 'Visual DNA generated. Confirm:'}
+                                </p>
+                            </div>
+                        </div>
+                        <textarea
+                            value={draftTags}
+                            onChange={(e) => setDraftTags(e.target.value)}
+                            className="w-full h-24 bg-black/60 text-sm text-banana-100 placeholder-gray-600 p-2 rounded border border-banana-500/30 focus:border-banana-500 outline-none resize-none"
+                        />
+                        <div className="flex gap-2 mt-1">
+                            <button
+                                onClick={confirmLock}
+                                className="flex-1 py-1.5 bg-banana-500 hover:bg-banana-400 text-black text-xs font-bold rounded flex justify-center items-center gap-1 transition-colors"
+                            >
+                                <Lock className="w-3 h-3" />
+                                {language === 'Chinese' ? '确认并锁定' : 'Confirm & Lock'}
+                            </button>
+                            <button
+                                onClick={cancelDraft}
+                                className="flex-1 py-1.5 bg-white/10 hover:bg-white/20 text-gray-300 text-xs rounded hover:text-white transition-colors"
+                            >
+                                {language === 'Chinese' ? '重新提取/取消' : 'Cancel'}
+                            </button>
+                        </div>
+                    </div>
+                )}
+
+                {/* Local Lock / Generate Button */}
+                {!styleState.visualDnaLocked && draftTags === null && (
+                    <button
+                        onClick={handleGenerateDna}
+                        disabled={isLocking}
+                        className="w-full py-2 px-4 border border-banana-500/30 bg-banana-500/10 hover:bg-banana-500/20 text-banana-400 text-xs font-bold rounded flex items-center justify-center gap-1.5 transition-all disabled:opacity-50 mt-4 shadow-sm"
+                    >
+                        {isLocking ? (
+                            <div className="w-3.5 h-3.5 border border-black/30 border-t-banana-400 rounded-full animate-spin" />
+                        ) : (
+                            <Sparkles className="w-3.5 h-3.5" />
+                        )}
+                        {language === 'Chinese' ? '提取视觉基因 (DNA)' : 'Extract Visual DNA'}
+                    </button>
+                )}
+            </div>
+
         </div>
     );
 };

@@ -8,31 +8,33 @@ export interface UseSceneMediaProps {
     characterDesc: string;
     globalStyle: GlobalStyle;
     assets: Asset[];
-    useAssets: boolean;
     areAssetsReady: boolean;
     language: string;
     chapterScenes?: Scene[];
-    onUpdate: (id: string, field: keyof Scene, value: any) => void;
-    onGenerateImageOverride?: (scene: Scene) => Promise<string>;
-    onImageGenerated?: (id: string, url: string) => void;
-    onVideoGenerated?: (id: string, url: string, assetId?: string) => void;
+    onUpdate: (id: string, fieldOrUpdates: keyof Scene | Partial<Scene>, value?: any) => void;
+    onGenerateImageOverride?: (scene: Scene, optionId?: string) => Promise<string>;
+    onImageGenerated?: (id: string, url: string, imageAssetId?: string, optionId?: string) => void;
+    onVideoGenerated?: (id: string, url: string, assetId?: string, optionId?: string) => void;
 }
 
 export function useSceneMedia(props: UseSceneMediaProps) {
     const {
-        scene, characterDesc, globalStyle, assets, useAssets,
+        scene, characterDesc, globalStyle, assets,
         areAssetsReady, language, chapterScenes, onUpdate,
         onGenerateImageOverride, onImageGenerated, onVideoGenerated
     } = props;
 
-    const [genStatus, setGenStatus] = useState<ImageGenStatus>(ImageGenStatus.IDLE);
-    const [videoStatus, setVideoStatus] = useState<ImageGenStatus>(ImageGenStatus.IDLE);
+    const [genStatusMap, setGenStatusMap] = useState<Record<string, ImageGenStatus>>({});
+    const [videoStatusMap, setVideoStatusMap] = useState<Record<string, ImageGenStatus>>({});
     const [viewMode, setViewMode] = useState<'image' | 'video'>('image');
     const [ttsLoading, setTtsLoading] = useState(false);
     const [audioUrl, setAudioUrl] = useState<string | null>(scene.narrationAudioUrl || null);
     const audioRef = useRef<HTMLAudioElement | null>(null);
     const videoRef = useRef<HTMLVideoElement | null>(null);
-    const isGeneratingRef = useRef(false);
+    const isGeneratingRef = useRef<Set<string>>(new Set());
+
+    const getGenStatus = (optionId?: string | null) => genStatusMap[optionId || 'default'] || ImageGenStatus.IDLE;
+    const getVideoStatus = (optionId?: string | null) => videoStatusMap[optionId || 'default'] || ImageGenStatus.IDLE;
     const fileInputRef = useRef<HTMLInputElement>(null);
     const videoFileInputRef = useRef<HTMLInputElement>(null);
     const latestImageRef = useRef<string | null>(scene.imageUrl || null);
@@ -62,12 +64,24 @@ export function useSceneMedia(props: UseSceneMediaProps) {
                 const result = e.target?.result as string;
                 if (result) {
                     latestImageRef.current = result;
-                    onUpdate(scene.id, 'imageUrl', result);
-                    setGenStatus(ImageGenStatus.COMPLETED);
+                    
+                    const updates: Partial<Scene> = { imageUrl: result };
                     if (scene.isStartEndFrameMode) {
                         const currentSceneImgId = `scene_img_${scene.id}`;
-                        onUpdate(scene.id, 'startEndAssetIds', [currentSceneImgId]);
+                        updates.startEndAssetIds = [currentSceneImgId];
                     }
+
+                    if (scene.prompt_options) {
+                        const newOptions = [...scene.prompt_options];
+                        const activeOptIdx = newOptions.findIndex((o) => o.video_prompt === scene.video_prompt);
+                        if (activeOptIdx !== -1) {
+                            newOptions[activeOptIdx] = { ...newOptions[activeOptIdx], imageUrl: result };
+                            updates.prompt_options = newOptions;
+                        }
+                    }
+
+                    onUpdate(scene.id, updates);
+                    setGenStatusMap(prev => ({ ...prev, 'default': ImageGenStatus.COMPLETED }));
                 }
             };
             reader.readAsDataURL(file);
@@ -75,61 +89,162 @@ export function useSceneMedia(props: UseSceneMediaProps) {
     };
 
     // ── Generate Image ──
-    const handleGenerateImage = async (force: boolean = false) => {
-        if (isGeneratingRef.current) return;
+    const handleGenerateImage = async (force: boolean = false, optionId?: string) => {
+        const key = optionId || 'default';
+        if (isGeneratingRef.current.has(key)) return;
         if (!areAssetsReady) return;
         if (!force && hasImage) return;
 
-        isGeneratingRef.current = true;
-        setGenStatus(ImageGenStatus.GENERATING);
+        isGeneratingRef.current.add(key);
+        setGenStatusMap(prev => ({ ...prev, [key]: ImageGenStatus.GENERATING }));
         try {
             let url = "";
+            let imageAssetId: string | undefined;
             if (onGenerateImageOverride) {
-                url = await onGenerateImageOverride(scene);
+                url = await onGenerateImageOverride(scene, optionId);
             } else {
-                const result = await generateSceneImage(scene, globalStyle, assets);
+                const result = await generateSceneImage(scene, globalStyle, assets, optionId, chapterScenes);
                 url = result.imageUrl || result;
+                imageAssetId = result.imageAssetId;
             }
-            setGenStatus(ImageGenStatus.COMPLETED);
+            setGenStatusMap(prev => ({ ...prev, [key]: ImageGenStatus.COMPLETED }));
             if (onImageGenerated) {
-                onImageGenerated(scene.id, url);
+                onImageGenerated(scene.id, url, imageAssetId, optionId);
             }
         } catch (error) {
             console.error(error);
-            setGenStatus(ImageGenStatus.ERROR);
+            setGenStatusMap(prev => ({ ...prev, [key]: ImageGenStatus.ERROR }));
         } finally {
-            isGeneratingRef.current = false;
+            isGeneratingRef.current.delete(key);
+        }
+    };
+
+    // ── Batch Generate 3 Images ──
+    const handleGenerateBatchImages = async () => {
+        if (!areAssetsReady) return;
+        if (!scene.prompt_options || scene.prompt_options.length === 0) return;
+        
+        const updatesMap: Record<string, ImageGenStatus> = {};
+        scene.prompt_options.forEach(opt => updatesMap[opt.option_id] = ImageGenStatus.GENERATING);
+        setGenStatusMap(prev => ({ ...prev, ...updatesMap }));
+        
+        try {
+            const newOptions = [...scene.prompt_options];
+            await Promise.all(newOptions.map(async (opt, idx) => {
+                try {
+                    const result = await generateSceneImage(scene, globalStyle, assets, opt.option_id, chapterScenes);
+                    const url = result.imageUrl || result;
+                    const assetId = result.imageAssetId;
+                    newOptions[idx] = { 
+                        ...newOptions[idx], 
+                        imageUrl: url,
+                        imageAssetId: assetId
+                    };
+                    setGenStatusMap(prev => ({ ...prev, [opt.option_id]: ImageGenStatus.COMPLETED }));
+                } catch (e) {
+                    console.error("Batch image gen failed for option", opt.option_id, e);
+                    setGenStatusMap(prev => ({ ...prev, [opt.option_id]: ImageGenStatus.ERROR }));
+                }
+            }));
+            
+            const activeOpt = newOptions.find((o) => o.video_prompt === scene.video_prompt) || newOptions[0];
+            if (activeOpt.imageUrl) {
+               onUpdate(scene.id, {
+                   prompt_options: newOptions,
+                   imageUrl: activeOpt.imageUrl
+               });
+               latestImageRef.current = activeOpt.imageUrl;
+            } else {
+               onUpdate(scene.id, 'prompt_options', newOptions);
+            }
+        } catch(e) {
+            console.error("Batch image gen failed", e);
+        }
+    };
+
+    // ── Batch Generate 3 Videos ──
+    const handleGenerateBatchVideos = async () => {
+        // Technically this should check videoAssetsReady, but we only have areAssetsReady as prop here, which acts as base lock
+        if (!areAssetsReady) return;
+        if (!scene.prompt_options || scene.prompt_options.length === 0) return;
+        
+        const updatesMap: Record<string, ImageGenStatus> = {};
+        scene.prompt_options.forEach(opt => updatesMap[opt.option_id] = ImageGenStatus.GENERATING);
+        setVideoStatusMap(prev => ({ ...prev, ...updatesMap }));
+        
+        try {
+            const newOptions = [...scene.prompt_options];
+            await Promise.all(newOptions.map(async (opt, idx) => {
+                try {
+                    let imageToUse = opt.imageUrl || scene.imageUrl;
+                    // Preload asset if possible (simplification: assumes URL is ready if already loaded)
+                    const tempScene = { ...scene, video_prompt: opt.video_prompt, np_prompt: opt.np_prompt, video_lens: opt.video_lens, video_camera: opt.video_camera };
+                    
+                    const { operation } = await generateVideo(imageToUse || '', tempScene, globalStyle.aspectRatio, assets, globalStyle, chapterScenes, opt.option_id);
+                    const { url } = await pollVideoUntilDone(operation);
+                    newOptions[idx] = { ...newOptions[idx], videoUrl: url };
+                    setVideoStatusMap(prev => ({ ...prev, [opt.option_id]: ImageGenStatus.COMPLETED }));
+                } catch (e) {
+                    console.error("Batch video gen failed for option", opt.option_id, e);
+                    setVideoStatusMap(prev => ({ ...prev, [opt.option_id]: ImageGenStatus.ERROR }));
+                }
+            }));
+            
+            const activeOpt = newOptions.find((o) => o.video_prompt === scene.video_prompt) || newOptions[0];
+            if (activeOpt.videoUrl) {
+               onUpdate(scene.id, {
+                   prompt_options: newOptions,
+                   videoUrl: activeOpt.videoUrl
+               });
+            } else {
+               onUpdate(scene.id, 'prompt_options', newOptions);
+            }
+            setViewMode('video');
+        } catch(e) {
+            console.error("Batch video gen failed", e);
         }
     };
 
     // ── Generate Video (async submit + poll) ──
-    const handleGenerateVideo = async () => {
+    const handleGenerateVideo = async (optionId?: string) => {
+        const key = optionId || 'default';
         let imageToUse = latestImageRef.current || scene.imageUrl;
-        if (!imageToUse && scene.imageAssetId) {
+        let assetIdToUse = scene.imageAssetId;
+
+        // If an explicit optionId is provided, prioritize its specific image
+        if (optionId && scene.prompt_options) {
+            const opt = scene.prompt_options.find(o => o.option_id === optionId);
+            if (opt && (opt.imageUrl || opt.imageAssetId)) {
+                imageToUse = opt.imageUrl || null;
+                assetIdToUse = opt.imageAssetId;
+            }
+        }
+
+        if (!imageToUse && assetIdToUse) {
             try {
-                const loaded = await loadAssetUrl(scene.imageAssetId);
+                const loaded = await loadAssetUrl(assetIdToUse);
                 if (loaded) imageToUse = loaded;
             } catch (e) {
                 console.error("Failed to load image for video gen", e);
             }
         }
         // Allow video gen without scene image (reference mode: @图像 tags provide refs)
-        setVideoStatus(ImageGenStatus.GENERATING);
+        setVideoStatusMap(prev => ({ ...prev, [key]: ImageGenStatus.GENERATING }));
         try {
             // Step 1: Submit (returns immediately)
-            const { operation } = await generateVideo(imageToUse || '', scene, globalStyle.aspectRatio, useAssets ? assets : [], undefined, chapterScenes);
+            const { operation } = await generateVideo(imageToUse || '', scene, globalStyle.aspectRatio, assets, globalStyle, chapterScenes, optionId);
             // Step 2: Poll until done
             const { url } = await pollVideoUntilDone(operation);
 
-            setVideoStatus(ImageGenStatus.COMPLETED);
+            setVideoStatusMap(prev => ({ ...prev, [key]: ImageGenStatus.COMPLETED }));
             if (onVideoGenerated) {
-                onVideoGenerated(scene.id, url);
+                onVideoGenerated(scene.id, url, undefined, optionId);
             }
             // Auto-switch to video view
             setViewMode('video');
         } catch (error) {
             console.error(error);
-            setVideoStatus(ImageGenStatus.ERROR);
+            setVideoStatusMap(prev => ({ ...prev, [key]: ImageGenStatus.ERROR }));
         }
     };
 
@@ -218,32 +333,59 @@ export function useSceneMedia(props: UseSceneMediaProps) {
         }
     };
 
-    const handleRefresh = () => {
+    const handleRefresh = (optionId?: string) => {
         if (viewMode === 'video') {
-            handleGenerateVideo();
+            handleGenerateVideo(optionId);
         } else {
-            handleGenerateImage(true);
+            handleGenerateImage(true, optionId);
         }
     };
 
     // ── Delete Image ──
-    const handleDeleteImage = () => {
+    const handleDeleteImage = (optionId?: string) => {
+        const key = optionId || 'default';
         latestImageRef.current = null;
-        onUpdate(scene.id, 'imageUrl', undefined);
-        onUpdate(scene.id, 'imageAssetId', undefined);
-        setGenStatus(ImageGenStatus.IDLE);
+        const updates: Partial<Scene> = {
+            imageUrl: undefined,
+            imageAssetId: undefined
+        };
+
+        if (scene.prompt_options) {
+            const newOptions = [...scene.prompt_options];
+            const activeOptIdx = newOptions.findIndex((o) => o.video_prompt === scene.video_prompt);
+            if (activeOptIdx !== -1) {
+                newOptions[activeOptIdx] = { ...newOptions[activeOptIdx], imageUrl: undefined, imageAssetId: undefined };
+                updates.prompt_options = newOptions;
+            }
+        }
+
+        onUpdate(scene.id, updates);
+        setGenStatusMap(prev => ({ ...prev, [key]: ImageGenStatus.IDLE }));
     };
 
     // ── Delete Video ──
-    const handleDeleteVideo = () => {
+    const handleDeleteVideo = (optionId?: string) => {
+        const key = optionId || 'default';
+        const updates: Partial<Scene> = {};
         if (scene.isStartEndFrameMode) {
-            onUpdate(scene.id, 'startEndVideoUrl', undefined);
-            onUpdate(scene.id, 'startEndVideoAssetId', undefined);
+            updates.startEndVideoUrl = undefined;
+            updates.startEndVideoAssetId = undefined;
         } else {
-            onUpdate(scene.id, 'videoUrl', undefined);
-            onUpdate(scene.id, 'videoAssetId', undefined);
+            updates.videoUrl = undefined;
+            updates.videoAssetId = undefined;
         }
-        setVideoStatus(ImageGenStatus.IDLE);
+
+        if (scene.prompt_options) {
+            const newOptions = [...scene.prompt_options];
+            const activeOptIdx = newOptions.findIndex((o) => o.video_prompt === scene.video_prompt);
+            if (activeOptIdx !== -1) {
+                newOptions[activeOptIdx] = { ...newOptions[activeOptIdx], videoUrl: undefined, videoAssetId: undefined };
+                updates.prompt_options = newOptions;
+            }
+        }
+
+        onUpdate(scene.id, updates);
+        setVideoStatusMap(prev => ({ ...prev, [key]: ImageGenStatus.IDLE }));
     };
 
     // ── Upload Video ──
@@ -255,12 +397,24 @@ export function useSceneMedia(props: UseSceneMediaProps) {
         const file = event.target.files?.[0];
         if (file) {
             const url = URL.createObjectURL(file);
+            const updates: Partial<Scene> = {};
             if (scene.isStartEndFrameMode) {
-                onUpdate(scene.id, 'startEndVideoUrl', url);
+                updates.startEndVideoUrl = url;
             } else {
-                onUpdate(scene.id, 'videoUrl', url);
+                updates.videoUrl = url;
             }
-            setVideoStatus(ImageGenStatus.COMPLETED);
+
+            if (scene.prompt_options) {
+                const newOptions = [...scene.prompt_options];
+                const activeOptIdx = newOptions.findIndex((o) => o.video_prompt === scene.video_prompt);
+                if (activeOptIdx !== -1) {
+                    newOptions[activeOptIdx] = { ...newOptions[activeOptIdx], videoUrl: url };
+                    updates.prompt_options = newOptions;
+                }
+            }
+
+            onUpdate(scene.id, updates);
+            setVideoStatusMap(prev => ({ ...prev, 'default': ImageGenStatus.COMPLETED }));
             setViewMode('video');
         }
         event.target.value = '';
@@ -270,20 +424,20 @@ export function useSceneMedia(props: UseSceneMediaProps) {
     const syncMediaStatus = () => {
         if (scene.imageUrl) {
             latestImageRef.current = scene.imageUrl;
-            setGenStatus(ImageGenStatus.COMPLETED);
+            setGenStatusMap(prev => ({ ...prev, 'default': ImageGenStatus.COMPLETED }));
         }
         // Check video status based on current mode
         const activeVideoUrl = scene.isStartEndFrameMode ? scene.startEndVideoUrl : scene.videoUrl;
         if (activeVideoUrl) {
-            setVideoStatus(ImageGenStatus.COMPLETED);
+            setVideoStatusMap(prev => ({ ...prev, 'default': ImageGenStatus.COMPLETED }));
         }
         if (scene.narrationAudioUrl) setAudioUrl(scene.narrationAudioUrl);
     };
 
     return {
         // State
-        genStatus,
-        videoStatus,
+        getGenStatus,
+        getVideoStatus,
         viewMode, setViewMode,
         ttsLoading,
         audioUrl,
@@ -298,6 +452,8 @@ export function useSceneMedia(props: UseSceneMediaProps) {
         // Handlers
         handleGenerateImage,
         handleGenerateVideo,
+        handleGenerateBatchImages,
+        handleGenerateBatchVideos,
         handleNarrationTTS,
         handleDownloadAudio,
         handleUploadClick,

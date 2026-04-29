@@ -49,10 +49,16 @@ export function useSceneManager(
         }, 900);
     };
 
-    const handleSceneUpdate = (chunkId: string, sceneId: string, updates: Partial<Scene>) => {
+    const handleSceneUpdate = (chunkId: string, sceneId: string, updates: Partial<Scene> | ((prevScene: Scene) => Partial<Scene>)) => {
         setChunks(prev => prev.map(c => {
             if (c.id !== chunkId) return c;
-            const updatedScenes = c.scenes.map(s => s.id === sceneId ? { ...s, ...updates } : s);
+            const updatedScenes = c.scenes.map(s => {
+                if (s.id === sceneId) {
+                    const evaluatedUpdates = typeof updates === 'function' ? updates(s) : updates;
+                    return { ...s, ...evaluatedUpdates };
+                }
+                return s;
+            });
             const allImagesDone = updatedScenes.every(s => !!s.imageUrl);
             const newStatus = (c.status === 'shooting' && allImagesDone) ? 'completed' : c.status;
             return { ...c, scenes: updatedScenes, status: newStatus };

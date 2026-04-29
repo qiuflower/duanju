@@ -45,7 +45,12 @@ export const constructVideoPrompt = (scene: Scene, globalStyle?: GlobalStyle): s
     if (scene.video_prompt) {
         // Seedance format: Agent 3 provides complete prompt, just ensure style prefix
         if (stylePrefix && !scene.video_prompt.startsWith(stylePrefix.trim())) {
-            finalPrompt = `${stylePrefix}${scene.video_prompt}`;
+            const durationMatch = scene.video_prompt.match(/^(\d+-\d+s:\s*)/i);
+            if (durationMatch) {
+                finalPrompt = `${durationMatch[1]}${stylePrefix}${scene.video_prompt.slice(durationMatch[0].length)}`;
+            } else {
+                finalPrompt = `${stylePrefix}${scene.video_prompt}`;
+            }
         } else {
             finalPrompt = scene.video_prompt;
         }

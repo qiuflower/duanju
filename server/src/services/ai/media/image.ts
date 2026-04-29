@@ -77,11 +77,10 @@ export async function ensurePngDataUrl(url: string, maxDimension: number = 1024)
     }
 }
 
-/**
- * Pure function: build the image-generation prompt for an asset based on its type and style.
- * No AI call — just template logic. Can be called independently to pre-populate asset.prompt.
- */
-export const buildAssetPrompt = (asset: Asset, style: GlobalStyle): string => {
+export const computeStylePrefix = (style: GlobalStyle): string => {
+    if (style.visualDnaLocked === false) {
+        return "";
+    }
     const workStyle = style.work?.custom || (style.work?.selected !== 'None' ? style.work?.selected : '') || '';
     const useOriginalCharacters = style.work?.useOriginalCharacters || false;
     const textureStyle = style.texture?.custom || (style.texture?.selected !== 'None' ? style.texture?.selected : 'Realistic') || 'Realistic';
@@ -114,60 +113,58 @@ export const buildAssetPrompt = (asset: Asset, style: GlobalStyle): string => {
         const texture = textureStyle || "High Quality";
         stylePrefix = `[${medium}][${era}][${color}][${lighting}][${texture}], ((Art Style: ${workStyle})), ((Texture: ${textureStyle}))`;
     }
+    return stylePrefix;
+};
 
+/**
+ * Pure function: build the image-generation prompt for an asset based on its type and style.
+ * No AI call — just template logic. Can be called independently to pre-populate asset.prompt.
+ */
+export const buildAssetPrompt = (asset: Asset, style: GlobalStyle): string => {
     // Normalize legacy types: prop→item, creature→character, vehicle/effect→item
     const rawType = (asset.type || 'location') as string;
     const typeMap: Record<string, string> = { prop: 'item', creature: 'character', vehicle: 'item', effect: 'item' };
     const assetType = typeMap[rawType] || rawType;
 
-    const commonNegative = "text, watermark, signature, blurry, low quality, messy, comic panels, frame, border, speech bubble, labels, annotations, captions, letters, words, title, heading, writing";
-    let negativePrompt = commonNegative;
-
     // Auto-detect language from description content
     const isChinese = /[\u4e00-\u9fa5]/.test(asset.description || '');
 
     if (assetType === 'character') {
-        negativePrompt += ", multiple different characters, crowd, visual effects, glowing aura, magic spells, fire, lightning, particles, accessories floating";
-
         if (isChinese) {
-            return `(Best quality, masterpiece), ${stylePrefix}, 角色设定图, 纯白背景, 摄影棚灯光.
+            return `(最高画质, 大师杰作), 角色设定图, 纯白背景, 摄影棚灯光.
             画面左侧为${asset.name}面部极致特写，高清细节，正面直视镜头。画面右侧为${asset.name}全身三视图，正面、侧面、背面站立姿态，整齐排列。
             ${asset.description}。
-            绝对不允许出现任何文字、标注、说明。排除: ${negativePrompt}`;
+            绝对不允许出现任何文字、标注、说明。`;
         }
 
-        return `(Best quality, masterpiece), ${stylePrefix}, character design sheet, pure white background, studio lighting.
+        return `(Best quality, masterpiece), character design sheet, pure white background, studio lighting.
             Left side shows extreme close-up portrait of ${asset.name}'s face, high definition detailed eyes, looking directly at camera. Right side shows ${asset.name} full body three-view turnaround, front side back standing poses neatly arranged.
             ${asset.description}. 
-            Absolutely no text, no labels, no annotations. Exclude: ${negativePrompt}`;
+            Absolutely no text, no labels, no annotations.`;
     } else if (assetType === 'item') {
-        negativePrompt += ", person, people, man, woman, child, character, hand, fingers, holding, mannequin";
-
         if (isChinese) {
-            return `(Best quality, masterpiece, extreme detail, clean lines), ${stylePrefix}, 物品概念设定图, 静态展示, 无特效, 无动作.
-            画面背景为纯净白色，无任何多余杂物。所有视图展示的是同一个物品，形状、比例、配色、材质、细节必须100%完全统一，无任何特征偏差，如同对同一个实物从不同角度拍摄的照片。
-            画面采用标准化排版布局：画面左侧主视觉区为${asset.name}完整45度视角展示，完整呈现物品整体造型、核心结构与整体质感，无任何裁切。画面右上区域水平排列3个标准视图，从左到右依次为物品正面视图、正侧面视图、完整背面视图，所有视图完整展示物品对应角度的全部结构，无裁切。画面右下区域水平排列2个核心部件特写，展示物品最具辨识度的局部细节与材质肌理，无裁切。
+            return `(最高画质, 大师杰作, 极致细节, 清晰线条), 完美的物品概念设定版, 纯白背景, 静态展示, 无特效, 无动作.
+            包含物品正面、侧面、背面及局部特写，排版整洁有序。所有视图展示的是同一个物品，形状、比例、配色、材质、细节必须100%完全统一，无任何特征偏差，如同对同一个实物从不同角度拍摄的照片。
             物品核心设定：${asset.description}。
             必须完整保留物品本体原生的功能性文字与标识（铭牌、编号、刻度、铭文等），所有视图中对应文字位置、内容完全一致，清晰可读。
-            绝对禁止生成额外的标注文字、水印、签名、视图说明文字。排除: ${negativePrompt}, glow, sparkle, particle, motion blur, action pose, dynamic effect, inconsistent views, different objects, shape mismatch`;
+            绝对禁止生成额外的标注文字、水印、签名。`;
         }
 
-        return `(Best quality, masterpiece, extreme detail, clean lines), ${stylePrefix}, object concept design sheet, static display, no effects, no action.
-            Pure white background, no extra objects. All views show the same single object, identical shape, proportions, color, material and detail across every view, as if photographed from different angles, zero deviation.
-            Standardized layout: Left main visual area shows ${asset.name} in complete 45-degree angle view, fully displaying overall form, core structure and texture, no cropping. Upper right area shows 3 standard views arranged horizontally, left to right: front view, side view, full back view, each showing complete structure at that angle, no cropping. Lower right area shows 2 core detail close-ups highlighting the most distinctive material texture and fine details, no cropping.
+        return `(Best quality, masterpiece, extreme detail, clean lines), perfect object concept design sheet, pure white background, static display, no effects, no action.
+            Includes front, side, back views and close-up details, neatly arranged layout. All views show the same single object, identical shape, proportions, color, material and detail across every view, as if photographed from different angles, zero deviation.
             Core design: ${asset.description}.
             Preserve all functional text inherent to the object itself such as nameplates, serial numbers, scale markings, inscriptions. These must be consistent and legible across all views.
-            Absolutely no annotation text, no watermarks, no signatures, no view labels. Exclude: ${negativePrompt}, glow, sparkle, particle, motion blur, action pose, dynamic effect, inconsistent views, different objects, shape mismatch`;
+            Absolutely no annotation text, no watermarks, no signatures.`;
     } else {
         if (isChinese) {
-            return `(Best quality, masterpiece), ${stylePrefix}, 建立镜头, 广角, 环境概念艺术, 电影构图, 纯场景, 无角色, 无人物.
+            return `(最高画质, 大师杰作), 建立镜头, 广角, 环境概念艺术, 电影构图, 纯场景, 无角色, 无人物.
             ${asset.name}：${asset.description}。
-            绝对不允许出现任何文字、标注、说明。排除: ${negativePrompt}`;
+            绝对不允许出现任何文字、标注、说明。`;
         }
 
-        return `(Best quality, masterpiece), ${stylePrefix}, establishing shot, wide angle, environment concept art, cinematic composition, scenery only, no characters, no people.
+        return `(Best quality, masterpiece), establishing shot, wide angle, environment concept art, cinematic composition, scenery only, no characters, no people.
             ${asset.name}: ${asset.description}. 
-            Absolutely no text, no labels, no annotations. Exclude: ${negativePrompt}`;
+            Absolutely no text, no labels, no annotations.`;
     }
 };
 
@@ -181,15 +178,31 @@ export const generateAssetImage = async (
     // Use override > existing asset.prompt > build new
     const prompt = overridePrompt || asset.prompt || buildAssetPrompt(asset, style);
 
+    const stylePrefix = computeStylePrefix(style);
+    let finalPrompt = prompt;
+    if (stylePrefix && !finalPrompt.includes(stylePrefix.trim())) {
+        finalPrompt = `${stylePrefix}, ${finalPrompt}`;
+    }
+
     const ar = style.aspectRatio || '16:9';
 
     const callModel = async (p: string) => {
+        console.log(`[Asset Gen] Prompt: ${p}`);
         const parts: any[] = [{ text: p }];
 
         // Add reference image from existing assets if available
-        const refImg = referenceImage || asset.refImageUrl;
+        let refImg = referenceImage;
+        if (!refImg && asset && (asset.refImageUrl || asset.refImageAssetId)) {
+            refImg = asset.refImageUrl || asset.refImageAssetId;
+        }
+
         if (refImg) {
             try {
+                // If it's a URL/AssetID instead of Base64, we need to load it first
+                if (!refImg.startsWith('data:')) {
+                    refImg = await ensurePngDataUrl(refImg);
+                }
+
                 const matches = refImg.match(/^data:([a-zA-Z0-9]+\/[a-zA-Z0-9\-.+]+);base64,(.+)$/);
                 if (matches && matches.length === 3) {
                     parts.push({
@@ -207,7 +220,7 @@ export const generateAssetImage = async (
         const response = await retryWithBackoff<GenerateContentResponse>(() => ai.models.generateContent({
             model: MODELS.IMAGE_GEN,
             contents: { parts },
-            config: { imageConfig: { aspectRatio: ar } }
+            config: { imageConfig: { aspectRatio: ar, isAsset: true } }
         }), 1, 2000);
 
         if (!response.candidates || response.candidates.length === 0) {
@@ -219,14 +232,13 @@ export const generateAssetImage = async (
     };
 
     try {
-        const imageUrl = await callModel(prompt);
+        const imageUrl = await callModel(finalPrompt);
         return { imageUrl, prompt };
     } catch (e: any) {
         console.warn("Asset Gen Attempt 1 Failed:", e.message);
 
         try {
-            const commonNeg = "text, watermark, signature, blurry, low quality, comic panels, split screen, collage, grid, frame, border, speech bubble";
-            const simplePrompt = `(Best quality), ${asset.type === 'character' ? 'Character Sheet, Three Views, white background' : asset.type === 'item' ? 'Item views, white background' : 'Environment concept art, no humans, empty scenery'}, Subject: ${asset.description}. Exclude: ${commonNeg}`;
+            const simplePrompt = `(Best quality), ${asset.type === 'character' ? 'Character Sheet, Three Views, white background' : asset.type === 'item' ? 'Item views, white background' : 'Environment concept art, no humans, empty scenery'}, Subject: ${asset.description}`;
             const imageUrl = await callModel(simplePrompt);
             return { imageUrl, prompt: simplePrompt };
         } catch (e2) {
@@ -238,45 +250,34 @@ export const generateAssetImage = async (
 export const generateSceneImage = async (
     scene: any,
     globalStyle?: GlobalStyle,
-    assets: Asset[] = []
+    assets: Asset[] = [],
+    optionId?: string
 ): Promise<any> => {
-    const prompt = scene.np_prompt || scene.visual_desc || '';
-    if (!prompt.trim()) {
+    // If optionId is provided, find the specific option, otherwise fallback to main scene
+    const option = optionId && scene.prompt_options ? scene.prompt_options.find((o: any) => o.option_id === optionId) : null;
+    const prompt = option ? (option.np_prompt || option.video_prompt) : (scene.np_prompt || scene.visual_desc || '');
+
+    if (!prompt || !prompt.trim()) {
         throw new Error('No prompt available for scene image generation. Please generate prompts first.');
     }
-    const sceneAssetIds = scene.assetIds || [];
     const ar = globalStyle?.aspectRatio || '16:9';
-    const finalPrompt = prompt.substring(0, 1500);
 
-    // 1. Identify Assets
-    let usedAssets: Asset[] = [];
-
-    if (sceneAssetIds && sceneAssetIds.length > 0) {
-        usedAssets = assets.filter(a => sceneAssetIds.includes(a.id) && a.refImageUrl);
-    } else {
-        const tags = extractAssetTags(prompt).filter(t => !isStoryboardTag(t.name));
-        const matchedAssets = new Map<string, Asset>();
-        for (const tag of tags) {
-            const asset = resolveTagToAsset(tag, assets);
-            if (asset && asset.refImageUrl && !matchedAssets.has(asset.id)) {
-                matchedAssets.set(asset.id, asset);
-            }
-        }
-        for (const a of assets) {
-            if (a.refImageUrl && a.name.length >= 2 && prompt.includes(a.name) && !matchedAssets.has(a.id)) {
-                matchedAssets.set(a.id, a);
-            }
-        }
-        usedAssets = [...matchedAssets.values()];
+    let basePrompt = prompt.substring(0, 1500);
+    const stylePrefix = globalStyle?.visualTags ? `${globalStyle.visualTags}. ` : "";
+    let finalPrompt = basePrompt;
+    if (stylePrefix && !basePrompt.startsWith(stylePrefix.trim())) {
+        finalPrompt = `${stylePrefix}${basePrompt}`;
     }
 
-    usedAssets = usedAssets.slice(0, 3);
+    // 1. Identify Assets - Frontend SSOT provides exactly what is needed!
+    const usedAssets: Asset[] = assets;
 
     // 2. Build Multi-modal Request Parts
     const parts: any[] = [];
     let instructions = "";
 
-    usedAssets.forEach((asset, index) => {
+    // 2.2 Next push the asset reference images
+    usedAssets.forEach((asset) => {
         if (asset.refImageUrl) {
             const cleanBase64 = asset.refImageUrl.replace(/^data:image\/(png|jpeg|jpg);base64,/, "");
             parts.push({
@@ -285,27 +286,19 @@ export const generateSceneImage = async (
                     data: cleanBase64
                 }
             });
-            instructions += ` Reference Image ${index + 1} is ${asset.name} (${asset.type}).`;
+            instructions += ` Reference Image ${parts.length} is ${asset.name} (${asset.type}).`;
         }
     });
 
     // 3. Construct Final Prompt
     let fullText = stripAssetTags(finalPrompt);
     if (instructions) {
-        fullText = `STRICTLY FOLLOW REFERENCES. ${instructions} ${fullText}. Use the exact visual appearance of Reference Images for consistency.`;
+        fullText = ` ${instructions} ${fullText}. `;
     }
 
-    let negativePrompt = "comic panels, multiple panels, split screen, collage, grid, multiple views, frame, border, speech bubble, text, watermark, blurry";
-    const styleStr = JSON.stringify(globalStyle || {}).toLowerCase();
-    const isAncient = styleStr.includes('ancient') || styleStr.includes('wuxia') || styleStr.includes('period') || styleStr.includes('historical');
-
-    if (isAncient) {
-        negativePrompt += ", television, tv, phone, mobile, smartphone, computer, laptop, car, vehicle, modern building";
-    }
-
-    fullText = `${fullText}. --ar ${ar}`;
-    fullText = `${fullText}. Exclude: ${negativePrompt}`;
     parts.push({ text: fullText });
+
+    console.log(`[Scene Gen] Final Prompt: ${fullText}`);
 
     // 4. Call Model
     const response = await retryWithBackoff<GenerateContentResponse>(() => ai.models.generateContent({

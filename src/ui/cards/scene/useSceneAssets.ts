@@ -10,14 +10,13 @@ export interface UseSceneAssetsProps {
     globalStyle: GlobalStyle;
     language: string;
     chapterScenes: Scene[];
-    onUpdate: (id: string, field: keyof Scene, value: any) => void;
+    onUpdate: (id: string, fieldOrUpdates: keyof Scene | Partial<Scene>, value?: any) => void;
 }
 
 export function useSceneAssets(props: UseSceneAssetsProps) {
     const { scene, assets, globalStyle, language, chapterScenes, onUpdate } = props;
 
     const [activeAssetSelector, setActiveAssetSelector] = useState<'none' | 'image' | 'video'>('none');
-    const [useAssets, setUseAssets] = useState(scene.useAssets ?? true);
 
 
     const lastProcessedImageAssetsRef = useRef<string[]>(scene.assetIds || []);
@@ -57,8 +56,8 @@ export function useSceneAssets(props: UseSceneAssetsProps) {
                 if (id === `scene_img_${scene.id}`) {
                     assetsToUse = [...assetsToUse, {
                         id,
-                        name: "Current Scene",
-                        description: "The current generated storyboard image for this scene.",
+                        name: "分镜图",
+                        description: "当前分镜已生成的图片 (Current Scene)",
                         type: "item",
                         refImageUrl: scene.imageUrl
                     }];
@@ -116,30 +115,36 @@ export function useSceneAssets(props: UseSceneAssetsProps) {
                 // Allow duplicate tags in prompt — dedup for videoAssetIds, append all to prompt
                 const currentVideoIds = scene.videoAssetIds || scene.assetIds?.slice(0, 3) || [];
                 const uniqueNewIds = assetIdsToAdd.filter(id => !currentVideoIds.includes(id));
-                if (uniqueNewIds.length > 0) {
-                    const newIds = [...currentVideoIds, ...uniqueNewIds];
-                    onUpdate(scene.id, 'videoAssetIds', newIds);
-                }
                 // Sync: append @图像 tags to video prompt (allows duplicates)
                 let prompt = scene.video_prompt || scene.visual_desc || '';
                 const promptField = scene.video_prompt ? 'video_prompt' : 'visual_desc';
                 for (const id of assetIdsToAdd) {
                     prompt = appendTagToPrompt(prompt, id, newAssetsToAdd);
                 }
-                onUpdate(scene.id, promptField, prompt);
+
+                if (uniqueNewIds.length > 0) {
+                    const newIds = [...currentVideoIds, ...uniqueNewIds];
+                    onUpdate(scene.id, {
+                        videoAssetIds: newIds,
+                        [promptField]: prompt
+                    });
+                } else {
+                    onUpdate(scene.id, promptField, prompt);
+                }
             }
         } else {
             const currentIds = scene.assetIds || [];
             const uniqueNewIds = assetIdsToAdd.filter(id => !currentIds.includes(id));
             if (uniqueNewIds.length > 0) {
                 const newIds = [...currentIds, ...uniqueNewIds];
-                onUpdate(scene.id, 'assetIds', newIds);
-                // Sync: append @图像 tags to image prompt
                 let prompt = scene.np_prompt || '';
                 for (const id of uniqueNewIds) {
                     prompt = appendTagToPrompt(prompt, id, newAssetsToAdd);
                 }
-                onUpdate(scene.id, 'np_prompt', prompt);
+                onUpdate(scene.id, {
+                    assetIds: newIds,
+                    np_prompt: prompt
+                });
             }
         }
         setActiveAssetSelector('none');
@@ -152,7 +157,9 @@ export function useSceneAssets(props: UseSceneAssetsProps) {
         if (!asset || !prompt) return prompt;
         return prompt.replace(
             ASSET_TAG_REGEX,
-            (match, tagName, tagIdAnchor) => {
+            (match, p1, p2, p3, p4) => {
+                const tagName = p1 || p3;
+                const tagIdAnchor = p2 || p4;
                 // Match by #id anchor (exact)
                 if (tagIdAnchor && tagIdAnchor === asset.id) return '';
                 // Match by exact name or exact id
@@ -203,22 +210,47 @@ export function useSceneAssets(props: UseSceneAssetsProps) {
     useEffect(() => {
         let cancelled = false;
         const resolve = async () => {
-            const candidates = chapterScenes.filter(s => !!(s.imageUrl || s.imageAssetId));
-            const resolved = await Promise.all(candidates.map(async s => {
-                let url = s.imageUrl;
-                // Fallback: load from IndexedDB when Blob URL is missing/expired
-                if (!url && s.imageAssetId) {
-                    url = await loadAssetBase64(s.imageAssetId) || undefined;
+            const resolved = [];
+            for (const s of chapterScenes) {
+                let hasOptionImages = false;
+                // If scene has prompt_options, we should create a reference tag for each option that has an image
+                if (s.prompt_options && s.prompt_options.length > 0) {
+                    for (const opt of s.prompt_options) {
+                        if (opt.imageUrl || opt.imageAssetId) {
+                            hasOptionImages = true;
+                            let url = opt.imageUrl;
+                            if (!url && opt.imageAssetId) {
+                                url = await loadAssetBase64(opt.imageAssetId) || undefined;
+                            }
+                            resolved.push({
+                                id: `scene_img_${s.id}_${opt.option_id}`,
+                                name: `分镜${s.id}-${opt.option_id}`,
+                                description: s.visual_desc || "Generated storyboard",
+                                type: 'item' as const,
+                                refImageUrl: url,
+                                refImageAssetId: opt.imageAssetId
+                            });
+                        }
+                    }
+                } 
+                
+                // Also always add the base scene reference tag for backward compatibility 
+                // ONLY if there are no option images, to avoid UI clutter
+                if (!hasOptionImages && (s.imageUrl || s.imageAssetId)) {
+                    let url = s.imageUrl;
+                    if (!url && s.imageAssetId) {
+                        url = await loadAssetBase64(s.imageAssetId) || undefined;
+                    }
+                    resolved.push({
+                        id: `scene_img_${s.id}`,
+                        name: `分镜${s.id}`,
+                        description: s.visual_desc || "Generated storyboard",
+                        type: 'item' as const,
+                        refImageUrl: url,
+                        refImageAssetId: s.imageAssetId
+                    });
                 }
-                return {
-                    id: `scene_img_${s.id}`,
-                    name: `分镜${s.id}`,
-                    description: s.visual_desc || "Generated storyboard",
-                    type: 'item' as const,
-                    refImageUrl: url,
-                    refImageAssetId: s.imageAssetId
-                };
-            }));
+            }
             if (!cancelled) setSceneImages(resolved);
         };
         resolve();
@@ -228,7 +260,10 @@ export function useSceneAssets(props: UseSceneAssetsProps) {
     // ── Initialize video asset IDs when image first appears ──
     const initializeVideoAssetIds = () => {
         if (!scene.isStartEndFrameMode && scene.videoAssetIds === undefined) {
-            const currentSceneImgId = `scene_img_${scene.id}`;
+            // Determine which option is active, if any
+            const optionId = scene.prompt_options?.find(o => o.video_prompt === scene.video_prompt)?.option_id;
+            const currentSceneImgId = optionId ? `scene_img_${scene.id}_${optionId}` : `scene_img_${scene.id}`;
+            
             const availableAssets = assets.filter(a => (scene.assetIds || []).includes(a.id));
             const matched = matchAssetsToPrompt(scene.visual_desc, availableAssets, scene.assetIds || []);
             const top2Ids = matched.slice(0, 2).map(a => a.id);
@@ -265,7 +300,6 @@ export function useSceneAssets(props: UseSceneAssetsProps) {
 
     return {
         // State
-        useAssets, setUseAssets,
         activeAssetSelector, setActiveAssetSelector,
         sceneImages,
 

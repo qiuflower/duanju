@@ -96,7 +96,7 @@ export function useAppState() {
     }, [targetChunk, globalAssets]);
 
     // ── Handlers ────────────────────────────────────
-    const handleGenerateImageWrapper = async (scene: Scene, chunkAssets?: Asset[]) => {
+    const handleGenerateImageWrapper = async (scene: Scene, chunkAssets?: Asset[], optionId?: string, allScenes?: Scene[]) => {
         const assetsToUse = chunkAssets || displayedAssets;
         // Resolve blob: URLs to base64 before sending to backend (blob URLs are browser-only)
         const resolvedAssets = await Promise.all(assetsToUse.map(async (a) => {
@@ -111,7 +111,7 @@ export function useAppState() {
             }
             return a;
         }));
-        const result = await generateSceneImage(scene, globalStyle, resolvedAssets);
+        const result = await generateSceneImage(scene, globalStyle, resolvedAssets, optionId, allScenes);
         return result.imageUrl || result;
     };
 

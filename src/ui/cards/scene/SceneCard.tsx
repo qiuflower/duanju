@@ -1,4 +1,5 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
+import { Search, Link as LinkIcon, Sparkles, Play, Clapperboard } from 'lucide-react';
 import { Scene, GlobalStyle, Asset } from '@/shared/types';
 import { Translation } from '@/services/i18n/translations';
 import { AssetSelector } from '@/ui/panels/asset-library/AssetSelector';
@@ -14,7 +15,7 @@ interface SceneCardProps {
     scene: Scene;
     characterDesc: string;
     labels: Translation;
-    onUpdate: (id: string, field: keyof Scene, value: any) => void;
+    onUpdate: (id: string, fieldOrUpdates: keyof Scene | Partial<Scene>, value?: any) => void;
     onDelete?: (id: string) => void;
     onDuplicate?: (id: string) => void;
     isGeneratingExternal?: boolean;
@@ -35,6 +36,43 @@ interface SceneCardProps {
 const SceneCard: React.FC<SceneCardProps> = (props) => {
     const state = useSceneCard(props as UseSceneCardProps);
 
+    const adoptedOption = state.scene.prompt_options?.find(opt => opt.video_prompt === state.scene.video_prompt) 
+                          || state.scene.prompt_options?.[0];
+    const [viewingOptionId, setViewingOptionId] = useState<string | null>(null);
+
+    useEffect(() => {
+        if (!viewingOptionId && adoptedOption) {
+            setViewingOptionId(adoptedOption.option_id);
+        }
+    }, [adoptedOption, viewingOptionId]);
+
+    const viewingOption = state.scene.prompt_options?.find(o => o.option_id === (viewingOptionId || adoptedOption?.option_id));
+    const isAdopted = viewingOption?.video_prompt === state.scene.video_prompt;
+
+    const handleSynchronizedUpdate = (id: string, field: keyof Scene, value: any) => {
+        const currentOptId = viewingOption?.option_id;
+        if (state.scene.prompt_options && currentOptId) {
+            const syncedFields = [
+                'np_prompt', 'video_prompt', 'video_lens', 'video_camera', 
+                'video_vfx', 'video_duration', 'imageUrl', 'imageAssetId', 
+                'videoUrl', 'videoAssetId', 'assetIds', 'videoAssetIds'
+            ];
+            if (syncedFields.includes(field)) {
+                const newOptions = [...state.scene.prompt_options];
+                const optionIndex = newOptions.findIndex(o => o.option_id === currentOptId);
+                if (optionIndex !== -1) {
+                    newOptions[optionIndex] = { ...newOptions[optionIndex], [field]: value };
+                    state.onUpdate(id, {
+                        [field]: value,
+                        prompt_options: newOptions
+                    });
+                    return;
+                }
+            }
+        }
+        state.onUpdate(id, field, value);
+    };
+
     return (
         <div className={`rounded-xl border overflow-hidden bg-dark-900 shadow-lg transition-all duration-300 ${state.flash ? 'ring-2 ring-banana-500 animate-pulse' : 'border-white/5'}`}>
             <div className="flex flex-col md:flex-row">
@@ -42,9 +80,9 @@ const SceneCard: React.FC<SceneCardProps> = (props) => {
                 <SceneMediaViewer
                     scene={state.scene}
                     labels={state.labels}
-                    onUpdate={state.onUpdate}
-                    genStatus={state.genStatus}
-                    videoStatus={state.videoStatus}
+                    onUpdate={handleSynchronizedUpdate}
+                    genStatus={state.getGenStatus(viewingOptionId)}
+                    videoStatus={state.getVideoStatus(viewingOptionId)}
                     viewMode={state.viewMode}
                     setViewMode={state.setViewMode}
                     hasImage={state.hasImage}
@@ -52,12 +90,12 @@ const SceneCard: React.FC<SceneCardProps> = (props) => {
                     isGeneratingExternal={state.isGeneratingExternal}
                     areAssetsReady={state.areAssetsReady}
                     videoAssetsReady={state.videoAssetsReady}
-                    onGenerateImage={state.handleGenerateImage}
-                    onGenerateVideo={state.handleGenerateVideo}
+                    onGenerateImage={(force) => state.handleGenerateImage(force || false, viewingOptionId || undefined)}
+                    onGenerateVideo={() => state.handleGenerateVideo(viewingOptionId || undefined)}
                     onUploadClick={state.handleUploadClick}
-                    onRefresh={state.handleRefresh}
-                    onDeleteImage={state.handleDeleteImage}
-                    onDeleteVideo={state.handleDeleteVideo}
+                    onRefresh={() => state.handleRefresh(viewingOptionId || undefined)}
+                    onDeleteImage={() => state.handleDeleteImage(viewingOptionId || undefined)}
+                    onDeleteVideo={() => state.handleDeleteVideo(viewingOptionId || undefined)}
                     onVideoUploadClick={state.handleVideoUploadClick}
                     onSaveImage={state.saveImage}
                     fileInputRef={state.fileInputRef}
@@ -82,16 +120,101 @@ const SceneCard: React.FC<SceneCardProps> = (props) => {
                         onDownloadAudio={state.handleDownloadAudio}
                     />
 
+                    {/* Prompt Options Selection */}
+                    {state.scene.prompt_options && state.scene.prompt_options.length > 0 && (
+                        <div className="flex flex-col border-b border-white/5 bg-[#121212]">
+                            {/* Top alignment row with Batch Actions */}
+                            <div className="flex justify-end px-3 py-2 bg-[#1a1a1a] border-b border-black">
+                                <div className="flex gap-2">
+                                    <button
+                                        onClick={() => state.handleGenerateBatchImages()}
+                                        disabled={state.getGenStatus(viewingOptionId) === 'GENERATING' || !state.areAssetsReady}
+                                        className="px-4 py-1.5 rounded-md border border-purple-500/50 hover:bg-purple-500/20 text-purple-400 text-xs font-bold transition-colors disabled:opacity-50"
+                                        title={!state.areAssetsReady ? "请等待全局资产准备完成" : "为当前所有方案并发生成对应的分镜图片"}
+                                    >
+                                        一键生图
+                                    </button>
+                                    <button
+                                        onClick={() => state.handleGenerateBatchVideos()}
+                                        disabled={state.getVideoStatus(viewingOptionId) === 'GENERATING' || !state.videoAssetsReady}
+                                        className="px-4 py-1.5 rounded-md border border-blue-500/50 hover:bg-blue-500/20 text-blue-400 text-xs font-bold transition-colors disabled:opacity-50"
+                                        title={!state.videoAssetsReady ? "请等待全局资产准备完成" : "为当前所有方案并发生成对应的视频"}
+                                    >
+                                        一键生视频
+                                    </button>
+                                </div>
+                            </div>
+                            
+                            {/* Tabs Row */}
+                            <div className="flex border-b border-white/5">
+                                {state.scene.prompt_options.map((opt) => {
+                                    const isActive = viewingOption?.option_id === opt.option_id;
+                                    return (
+                                        <button
+                                            key={opt.option_id}
+                                            onClick={() => {
+                                                setViewingOptionId(opt.option_id);
+                                                // Always Auto-adopt the option's media when clicking its tab
+                                                state.onUpdate(state.scene.id, 'video_prompt', opt.video_prompt);
+                                                state.onUpdate(state.scene.id, 'np_prompt', opt.np_prompt);
+                                                state.onUpdate(state.scene.id, 'video_lens', opt.video_lens || '');
+                                                state.onUpdate(state.scene.id, 'video_camera', opt.video_camera || '');
+                                                state.onUpdate(state.scene.id, 'imageUrl', opt.imageUrl);
+                                                state.onUpdate(state.scene.id, 'imageAssetId', opt.imageAssetId);
+                                                state.onUpdate(state.scene.id, 'videoUrl', opt.videoUrl);
+                                                state.onUpdate(state.scene.id, 'videoAssetId', opt.videoAssetId);
+                                                state.onUpdate(state.scene.id, 'assetIds', opt.assetIds || []);
+                                                state.onUpdate(state.scene.id, 'videoAssetIds', opt.videoAssetIds || []);
+                                            }}
+                                            className={`flex-1 py-2.5 text-xs font-bold transition-colors border-b-2 flex justify-center items-center ${isActive ? 'bg-yellow-600/15 text-yellow-500 border-yellow-500' : 'bg-transparent text-gray-500 border-transparent hover:bg-white/5 hover:text-gray-300'}`}
+                                        >
+                                            方案{opt.option_id}: 实拍参考
+                                        </button>
+                                    );
+                                })}
+                            </div>
+
+                            {/* Reference Details Panel */}
+                            {viewingOption && (
+                                <div className="p-3 flex flex-col gap-3.5 bg-[#0a0a0a]">
+                                    <div className="flex items-center gap-2">
+                                        <span className="text-gray-400 text-xs flex items-center gap-1 shrink-0">
+                                            <Search className="w-3 h-3 text-blue-400" />
+                                            镜头参照:
+                                        </span>
+                                        <div className="flex-1 bg-[#151515] border border-yellow-500/30 rounded px-2.5 py-1 text-yellow-500 text-[11px] font-semibold truncate" title={viewingOption.lens_reference?.shot_name || viewingOption.lens_reference?.searchKeyword || '未知'}>
+                                            {viewingOption.lens_reference?.shot_name || viewingOption.lens_reference?.searchKeyword || '未知'}
+                                        </div>
+                                        {viewingOption.lens_reference?.video_url && (
+                                            <a href={viewingOption.lens_reference.video_url} target="_blank" rel="noreferrer" className="shrink-0 flex items-center gap-1 px-2.5 py-1 bg-blue-600 hover:bg-blue-500 text-white rounded text-[11px] font-bold transition-colors">
+                                                <LinkIcon className="w-3 h-3" /> 观看原片
+                                            </a>
+                                        )}
+                                    </div>
+
+                                    {/* Description */}
+                                    {viewingOption.lens_reference?.description && (
+                                        <div className="border-l-2 border-yellow-600/50 pl-2 py-0.5 flex flex-wrap gap-1.5 text-[11px] italic text-gray-400 items-baseline">
+                                            <span>{viewingOption.lens_reference.description}</span>
+                                            {viewingOption.lens_reference.timestamp && (
+                                                <span className="text-gray-500">(参考节点: {viewingOption.lens_reference.timestamp})</span>
+                                            )}
+                                        </div>
+                                    )}
+
+                                </div>
+                            )}
+                        </div>
+                    )}
+
                     {/* Middle: Split Content (Video Left, Image/Dialogue Right) */}
                     <div className="flex-1 grid grid-cols-1 lg:grid-cols-2 divide-y lg:divide-y-0 lg:divide-x divide-white/5">
                         {/* LEFT PANE: VIDEO PROMPT */}
                         <SceneVideoPane
                             scene={state.scene}
                             labels={state.labels}
-                            onUpdate={state.onUpdate}
+                            onUpdate={handleSynchronizedUpdate}
                             hasImage={state.hasImage}
-                            useAssets={state.useAssets}
-                            setUseAssets={state.setUseAssets}
                             assets={state.assets}
                             chapterScenes={state.chapterScenes}
                             onRemoveAsset={state.handleRemoveAsset}
@@ -113,7 +236,7 @@ const SceneCard: React.FC<SceneCardProps> = (props) => {
                             <SceneImagePane
                                 scene={state.scene}
                                 labels={state.labels}
-                                onUpdate={state.onUpdate}
+                                onUpdate={handleSynchronizedUpdate}
                                 assets={state.assets}
                                 chapterScenes={state.chapterScenes}
                                 onRemoveAsset={state.handleRemoveAsset}
@@ -127,7 +250,7 @@ const SceneCard: React.FC<SceneCardProps> = (props) => {
                             <SceneDialoguePane
                                 scene={state.scene}
                                 labels={state.labels}
-                                onUpdate={state.onUpdate}
+                                onUpdate={handleSynchronizedUpdate}
                             />
                         </div>
                     </div>
@@ -143,9 +266,9 @@ const SceneCard: React.FC<SceneCardProps> = (props) => {
                     onAssetCreated={state.onAddAsset}
                     maxSelections={state.activeAssetSelector === 'video' && !state.scene.isStartEndFrameMode ? 3 : undefined}
                     extraAssets={state.scene.imageUrl ? [{
-                        id: `scene_img_${state.scene.id}`,
-                        name: "Current Scene",
-                        description: "The current generated storyboard image for this scene.",
+                        id: (state.scene.prompt_options && viewingOptionId) ? `scene_img_${state.scene.id}_${viewingOptionId}` : `scene_img_${state.scene.id}`,
+                        name: "分镜图",
+                        description: "当前分镜已生成的图片 (Current Scene)",
                         type: "item",
                         refImageUrl: state.scene.imageUrl
                     }] : []}

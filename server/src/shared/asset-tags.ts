@@ -6,8 +6,12 @@
  * Examples:    [@图像_岑矜#hero_base]    [@图像_分镜S05]    @图像_岑矜的卧室
  */
 
-/** Unified regex: optional leading [, group 1 = display name, group 2 = optional #id anchor */
-export const ASSET_TAG_REGEX = /\[?@图像_([^\s，。,.;；：:！!？?、）)｝}\]\[（(｛{@#]+)(?:#([a-zA-Z0-9_]+))?\]?/g;
+/** 
+ * Unified regex: 
+ * 1. Bracketed tags (推荐): [@图像_显示名#asset_id] (支持内部带空格、括号等复杂命名)
+ * 2. Legacy tags (旧版兼容): @图像_显示名#asset_id (不能带空格/特殊符号)
+ */
+export const ASSET_TAG_REGEX = /\[@图像_([^#\]]+)(?:#([a-zA-Z0-9_]+))?\]|@图像_([^\s，。,.;；：:！!？?、）)｝}\]\[（(｛{@#]+)(?:#([a-zA-Z0-9_]+))?/g;
 
 export interface ParsedTag {
     /** Full match text (e.g. "@图像_岑矜#hero_base") */
@@ -22,14 +26,14 @@ export interface ParsedTag {
 export function extractAssetTags(text: string): ParsedTag[] {
     return [...text.matchAll(ASSET_TAG_REGEX)].map(m => ({
         raw: m[0],
-        name: m[1],
-        id: m[2] || undefined,
+        name: m[1] || m[3],
+        id: m[2] || m[4] || undefined,
     }));
 }
 
-/** Check if a tag name is a storyboard reference (分镜S01, 分镜E1_S01, etc.) */
+/** Check if a tag name is a storyboard reference (分镜S01, 分镜E1_S01, 分镜E1_S01-A, etc.) */
 export function isStoryboardTag(name: string): boolean {
-    return /^分镜(E\d+_)?S\d+$/.test(name);
+    return /^分镜(E\d+_)?S\d+(?:-[a-zA-Z0-9]+)?$/.test(name);
 }
 
 /** Extract tag display names, excluding 分镜 tags */
@@ -93,7 +97,10 @@ export function injectTagIds<T extends { name: string; id: string }>(
     candidates: T[]
 ): string {
     if (!text) return text;
-    return text.replace(ASSET_TAG_REGEX, (match, tagName: string, existingId: string) => {
+    return text.replace(ASSET_TAG_REGEX, (match, p1, p2, p3, p4) => {
+        const tagName = p1 || p3;
+        const existingId = p2 || p4;
+        if (!tagName) return match;
         if (isStoryboardTag(tagName)) return match.startsWith('[') ? match : `[@图像_${tagName}]`;
         if (existingId) return match.startsWith('[') ? match : `[@图像_${tagName}#${existingId}]`;
         const asset = bestMatchAsset(tagName, candidates);
@@ -103,11 +110,13 @@ export function injectTagIds<T extends { name: string; id: string }>(
 
 /**
  * Strip all @图像 tags from text (for sending to models that don't understand them).
- * Replaces each tag with an empty string and collapses extra whitespace.
+ * Extracts the display name from the tag to preserve sentence structure instead of leaving empty holes.
  */
 export function stripAssetTags(text: string): string {
     return text
-        .replace(ASSET_TAG_REGEX, '')
+        .replace(ASSET_TAG_REGEX, (match, p1, p2, p3, p4) => {
+            return p1 || p3 || '';
+        })
         .replace(/\s{2,}/g, ' ')
         .trim();
 }

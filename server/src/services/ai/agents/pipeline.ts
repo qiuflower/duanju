@@ -4,8 +4,8 @@ import { wait } from "../helpers";
 import { NarrativeBlueprint, MasterBeatSheet } from "./types";
 import { runAgent1_NarrativeAnalysis } from "./agent1-narrative";
 import { runAgent2_Annotation } from "./agent2-visual";
-import { runAgent3_AssetProduction } from "./agent3-asset";
-import { extractAssetsFromBeats, extractVisualDna } from "../style/index";
+import { runAgent3_AssetProduction, runAgent3_AssetProductionStream } from "./agent3-asset";
+import { extractAssetsFromBeats } from "../style/index";
 import { segmentScript, countBeatSegments } from "./script-segmenter";
 
 // --- HELPER for Agent 2/3 Retry with Validation ---
@@ -47,23 +47,8 @@ export const analyzeNarrative = async (
 
 // --- Helper: compute stylePrefix from GlobalStyle ---
 export function computeStylePrefix(style: GlobalStyle): string {
-    const useOriginalCharacters = style.work?.useOriginalCharacters || false;
-    const workStyle = style.work?.custom || (style.work?.selected !== 'None' ? style.work?.selected : '') || '';
-
-    let stylePrefix = style.visualTags || "";
-
-    if (useOriginalCharacters && workStyle.trim()) {
-        const normalizedWork = workStyle.trim();
-        const hasChinese = /[\u4e00-\u9fa5]/.test(normalizedWork);
-        const suffix = hasChinese ? "美术风格" : " Art Style";
-
-        if (!normalizedWork.endsWith(suffix.trim())) {
-            stylePrefix = `${normalizedWork}${suffix}`;
-        } else {
-            stylePrefix = normalizedWork;
-        }
-    }
-    return stylePrefix;
+    // 视觉 DNA 只需要直接使用全局定义的标签，不需要额外的拼装逻辑
+    return style.visualTags || "";
 }
 
 // --- Step 1: Generate Beat Sheet + Extract Assets ---
@@ -97,29 +82,71 @@ export const generateBeatSheet = async (
 
     const compactLensLibrary = toCompactLensLibrary();
 
-    // 确定性分段：将剧本拆为原子片段
+    // AI 导演模式：不再由程序预分段，改为由 AI 导演直接处理全文
     const scriptText = overrideText || episode.script || '';
-    const segments = segmentScript(scriptText);
-    const beatSegmentCount = countBeatSegments(segments);
+    
+    console.log(`[Pipeline] AI DIRECTOR mode: Analyzing full script...`);
 
-    // 标注模式：确定性分段 + AI 标注
-    console.log(`[Pipeline] ANNOTATION mode: ${segments.length} segments → ${beatSegmentCount} expected beats`);
+    // 准备叙事上下文
+    const visualDna = style.visualTags || "";
+    const narrativeContext = JSON.stringify({
+        logline: episode.logline || "",
+        pacing: episode.pacing_structure || {},
+        character_instructions: episode.character_instructions || {}
+    }, null, 2);
+
     const beatSheet = await executeWithRetryAndValidation(
-        () => runAgent2_Annotation(segments, language, compactLensLibrary),
-        (res) => res && Array.isArray(res.beats) && res.beats.length >= beatSegmentCount * 0.7,
-        "Agent 2 (Annotate)",
-        { episode: episode.episode_number, language, expectedBeats: beatSegmentCount },
+        () => runAgent2_Annotation(scriptText, language, compactLensLibrary, visualDna, narrativeContext),
+        (res) => res && Array.isArray(res.beats) && res.beats.length > 0,
+        "Agent 2 (Full Director)",
+        { episode: episode.episode_number, language },
         2
     );
 
-    let beatAssets = await extractAssetsFromBeats(beatSheet, language, existingAssets, workStyle, useOriginalCharacters);
-    for (let attempt = 1; beatAssets.length === 0 && attempt <= 3; attempt++) {
-        console.warn(`[generateBeatSheet] Asset extraction returned empty, retry ${attempt}/3...`);
-        beatAssets = await extractAssetsFromBeats(beatSheet, language, existingAssets, workStyle, useOriginalCharacters);
+    // ------------------- 新增：资产提取与智能继承逻辑 -------------------
+    
+    // 辅助函数：根据剧本文本自动兜底继承已有资产
+    const enrichWithExisting = (extracted: Asset[], existing: Asset[], beatsText: string) => {
+        // 提取出的资产名称集合，用于排重
+        const extractedNames = new Set(extracted.map(a => a.name));
+        const extractedIds = new Set(extracted.map(a => a.id));
+        
+        // 查找在剧本中出现，且未被 LLM 提取的已有资产
+        const inherited = existing.filter(ea => {
+            const isNotExtracted = !extractedNames.has(ea.name) && !extractedIds.has(ea.id);
+            // 简单粗暴的文本包含匹配（可涵盖绝大多数人名/道具名）
+            const isMentionedInScript = beatsText.includes(ea.name);
+            return isNotExtracted && isMentionedInScript;
+        });
+        
+        if (inherited.length > 0) {
+            console.log(`[Pipeline] Auto-inherited ${inherited.length} existing assets:`, inherited.map(a => a.name).join(', '));
+        }
+        
+        return [...extracted, ...inherited];
+    };
+
+    // 将剧本中所有分镜的视觉描述拼接成一整段长文本，供文本匹配使用
+    const fullBeatsText = (beatSheet.beats || []).map((b: any) => b.visual_action || '').join(' ');
+
+    // 第 1 次提取
+    let rawBeatAssets = await extractAssetsFromBeats(beatSheet, language, existingAssets, workStyle, useOriginalCharacters);
+    let beatAssets = enrichWithExisting(rawBeatAssets, existingAssets, fullBeatsText);
+
+    // 智能重试：兜底后如果依然为 0，大概率是空镜剧本。只允许 1 次额外重试，防止大模型抽风漏掉“全新角色”。
+    let attempts = 1;
+    while (beatAssets.length === 0 && attempts < 2) {
+        console.warn(`[generateBeatSheet] Asset extraction returned empty, fast retry ${attempts}/1...`);
+        rawBeatAssets = await extractAssetsFromBeats(beatSheet, language, existingAssets, workStyle, useOriginalCharacters);
+        beatAssets = enrichWithExisting(rawBeatAssets, existingAssets, fullBeatsText);
+        attempts++;
     }
+
+    // 破除死锁：移除 throw Error。如果重试后依然为 0，视为正常空镜（风景/环境展示）
     if (beatAssets.length === 0) {
-        throw new Error('Asset extraction failed after 3 retries — no assets extracted from beats. Please try again.');
+        console.warn('[Pipeline] Asset extraction yielded 0 assets after inheritance. Proceeding with empty asset list (scenic/abstract script).');
     }
+    // ------------------------------------------------------------------
 
     const epNum = episode.episode_number || 0;
     const emptyScenes: Scene[] = beatSheet.beats.map((beat: any) => ({
@@ -148,38 +175,10 @@ export const generatePromptsFromBeats = async (
     assets: Asset[],
     style: GlobalStyle
 ): Promise<{ scenes: Scene[]; visualDna: string }> => {
-    // Visual DNA 优先级（高→低）：
-    // 1. 1:1 还原 + 参考作品 → 跳过 DNA，stylePrefix 由 computeStylePrefix 处理为 "{作品名}美术风格"
-    // 2. 参考作品 + 画面质感 → AI 融合两者
-    // 3. 画面质感单独 → 直接使用原文
-    // 4. 已有 visualTags（来自图片分析） → 直接使用
-    // 5. 参考作品单独 → 通过 AI 推断
-    const workStyle = style.work?.custom || (style.work?.selected !== 'None' ? style.work?.selected : '') || '';
-    const textureStyle = style.texture?.custom || (style.texture?.selected !== 'None' ? style.texture?.selected : '') || '';
-    const useOriginalCharacters = style.work?.useOriginalCharacters || false;
-
-    let visualDna = '';
-    if (useOriginalCharacters && workStyle.trim()) {
-        // #1: 1:1 还原 = 最高优先级，跳过所有 DNA 计算
-        // computeStylePrefix 会将 stylePrefix 设为 "{作品名}美术风格"
-        visualDna = '';
-    } else if (workStyle && textureStyle) {
-        // #2: 两者同时存在 → AI 融合
-        const fused = await extractVisualDna(workStyle, textureStyle, language);
-        visualDna = fused || textureStyle; // fallback to texture if fusion fails
-    } else if (textureStyle) {
-        // #3: 画面质感单独 → 原文直传
-        visualDna = textureStyle;
-    } else if (style.visualTags) {
-        // #4: 缓存（来自图片分析等）
-        visualDna = style.visualTags;
-    } else if (workStyle) {
-        // #5: 参考作品单独 → AI 推断
-        const freshDna = await extractVisualDna(workStyle, '', language);
-        if (freshDna) visualDna = freshDna;
-    }
-    style = { ...style, visualTags: visualDna };
-
+    // 锁定后的DNA直接从 style.visualTags 读取
+    // computeStylePrefix 会处理 1:1 还原等特殊逻辑
+    let visualDna = style.visualTags || '';
+    
     const stylePrefix = computeStylePrefix(style);
 
     const scenes = await executeWithRetryAndValidation(
@@ -196,6 +195,34 @@ export const generatePromptsFromBeats = async (
     }));
 
     return { scenes: labeledScenes, visualDna };
+};
+
+export const generatePromptsFromBeatsStream = async function* (
+    beatSheet: MasterBeatSheet,
+    episodeNumber: number,
+    language: string,
+    assets: Asset[],
+    style: GlobalStyle
+): AsyncGenerator<{ scenes: Scene[]; visualDna?: string }> {
+    let visualDna = style.visualTags || '';
+    const stylePrefix = computeStylePrefix(style);
+
+    let firstChunk = true;
+    for await (const chunk of runAgent3_AssetProductionStream(beatSheet, language, assets, stylePrefix, style.aspectRatio || '16:9')) {
+        if (!chunk || chunk.length === 0) continue;
+        
+        const labeledScenes = chunk.map(scene => ({
+            ...scene,
+            id: `E${episodeNumber}_${scene.id}`
+        }));
+
+        if (firstChunk) {
+            yield { scenes: labeledScenes, visualDna };
+            firstChunk = false;
+        } else {
+            yield { scenes: labeledScenes };
+        }
+    }
 };
 
 // --- Legacy: Combined function ---

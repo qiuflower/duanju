@@ -103,7 +103,9 @@ const textToHtml = (
 
     return escaped.replace(
         TAG_REGEX,
-        (_match, tagName: string, tagId: string | undefined) => {
+        (_match, p1, p2, p3, p4) => {
+            const tagName = p1 || p3;
+            const tagId = (p2 || p4) as string | undefined;
             const info = findAssetInfo(tagName, assets, sceneImages, tagId);
             const colors = CHIP_COLORS[mode];
             const imgHtml = info.thumb
@@ -184,23 +186,26 @@ const MentionTextarea: React.FC<MentionTextareaProps> = ({
         prevTagsRef.current = extractTags(value);
     }, [value]);
 
-    // Render HTML when value or sceneImages changes externally
+    // Render HTML when value, assets, or sceneImages changes externally
     const sceneImagesFingerprint = sceneImages.map(s => `${s.name}:${s.refImageUrl ? '1' : '0'}`).join(',');
-    const lastSceneImagesFPRef = useRef(sceneImagesFingerprint);
+    const assetsFingerprint = assets.map(a => `${a.id}:${a.refImageUrl ? '1' : '0'}`).join(',');
+    const combinedFingerprint = `${sceneImagesFingerprint}|${assetsFingerprint}`;
+    
+    const lastFingerprintRef = useRef(combinedFingerprint);
     useEffect(() => {
         if (!editorRef.current) return;
         if (isInternalChange.current) {
             isInternalChange.current = false;
             return;
         }
-        const fpChanged = sceneImagesFingerprint !== lastSceneImagesFPRef.current;
-        lastSceneImagesFPRef.current = sceneImagesFingerprint;
+        const fpChanged = combinedFingerprint !== lastFingerprintRef.current;
+        lastFingerprintRef.current = combinedFingerprint;
         if (value !== lastRenderedValue.current || fpChanged) {
             const html = textToHtml(value, assets, sceneImages, mode as 'video' | 'image');
             editorRef.current.innerHTML = html || '';
             lastRenderedValue.current = value;
         }
-    }, [value, assets, sceneImagesFingerprint, mode]);
+    }, [value, assets, sceneImages, combinedFingerprint, mode]);
 
     // Initial render
     useEffect(() => {
@@ -219,8 +224,8 @@ const MentionTextarea: React.FC<MentionTextareaProps> = ({
         const promptNameSet = new Set<string>();
         const uniqueRefs = new Set<string>();
         for (const m of currentTagMatches) {
-            const tagName = m[1];
-            const tagId = m[2]; // #id anchor
+            const tagName = m[1] || m[3];
+            const tagId = m[2] || m[4]; // #id anchor
             if (tagId) promptIdSet.add(tagId);
             promptNameSet.add(tagName);
             // Use #id as unique key when available, otherwise name (avoids double-counting)
@@ -246,17 +251,32 @@ const MentionTextarea: React.FC<MentionTextareaProps> = ({
             let isInPrompt = promptIdSet.has(si.id) || promptNameSet.has(si.name);
             // Storyboard suffix matching: prompt has 分镜S01 but si.name is 分镜E1_S01
             if (!isInPrompt && isStoryboardTag(si.name)) {
-                const siSuffix = si.name.replace('分镜', ''); // "E1_S01"
+                let siSuffix = si.name.replace('分镜', ''); // "E1_S01"
+                // Strip option suffix if present for matching base scene
+                const suffixMatch = siSuffix.match(/-([a-zA-Z0-9]+)$/);
+                if (suffixMatch) {
+                    siSuffix = siSuffix.substring(0, siSuffix.length - suffixMatch[0].length);
+                }
+                
                 for (const pName of promptNameSet) {
                     if (isStoryboardTag(pName)) {
-                        const pSuffix = pName.replace('分镜', ''); // "S01"
-                        if (siSuffix === pSuffix || siSuffix.endsWith(`_${pSuffix}`)) {
+                        let pSuffix = pName.replace('分镜', ''); // "S01"
+                        const pMatch = pSuffix.match(/-([a-zA-Z0-9]+)$/);
+                        if (pMatch) {
+                            pSuffix = pSuffix.substring(0, pSuffix.length - pMatch[0].length);
+                        }
+                        
+                        // Exact match is required here to prevent B/C from being checked when only A is selected.
+                        // We shouldn't match base scene with its options in the dropdown checklist.
+                        if (si.name === pName) {
                             isInPrompt = true;
                             break;
                         }
                     }
                 }
             }
+
+            // Always allow options to show up even if the base scene is referenced
             items.push({
                 id: si.id,
                 name: si.name,
@@ -305,9 +325,11 @@ const MentionTextarea: React.FC<MentionTextareaProps> = ({
             }
         }
 
-        // Diff tags to detect removals — use resolveTagToAsset for accurate matching
+        // Diff tags to detect removals and additions
         const currentTags = extractTags(newValue);
         const prevTags = prevTagsRef.current;
+        
+        // Handle removals
         for (const tag of prevTags) {
             if (!currentTags.includes(tag)) {
                 // Use resolveTagToAsset for consistent matching
@@ -320,6 +342,20 @@ const MentionTextarea: React.FC<MentionTextareaProps> = ({
                 }
             }
         }
+
+        // Handle direct text additions (like pasting tags)
+        for (const tag of currentTags) {
+            if (!prevTags.includes(tag)) {
+                const resolved = resolveTagToAsset({ name: tag }, assets as any[]);
+                if (resolved) {
+                    onMention((resolved as any).id);
+                } else {
+                    const resolvedSi = resolveTagToAsset({ name: tag }, sceneImages as any[]);
+                    if (resolvedSi) onMention((resolvedSi as any).id);
+                }
+            }
+        }
+        
         prevTagsRef.current = currentTags;
     }, [onChange, assets, sceneImages, onUnmention]);
 
@@ -479,7 +515,7 @@ const MentionTextarea: React.FC<MentionTextareaProps> = ({
                 >
                     {maxMentions !== undefined && (
                         <div className="px-3 py-1 text-[9px] text-gray-500 border-b border-white/5">
-                            参考图 {new Set([...value.matchAll(TAG_REGEX)].map(m => m[2] || m[1])).size}/{maxMentions}
+                            参考图 {new Set([...value.matchAll(TAG_REGEX)].map(m => (m[2] || m[4]) || (m[1] || m[3]))).size}/{maxMentions}
                         </div>
                     )}
                     {candidates.map((c, i) => (

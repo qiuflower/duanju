@@ -1,5 +1,4 @@
-import React, { useState } from 'react';
-import { createPortal } from 'react-dom';
+import React from 'react';
 import { Asset } from '@/shared/types';
 import { Translation } from '@/services/i18n/translations';
 import { LazyMedia } from '@/ui/common/LazyMedia';
@@ -31,7 +30,6 @@ const AssetRow: React.FC<AssetRowProps> = ({
     labels, onUpdateAsset, onAddVariant, onDeleteAsset, onToggleExpand,
     onGenMetaImage, onSaveImage
 }) => {
-    const [promptExpanded, setPromptExpanded] = useState(false);
     return (
         <>
             <div className={`
@@ -58,7 +56,7 @@ const AssetRow: React.FC<AssetRowProps> = ({
                                     imgClassName="w-full h-full object-cover"
                                 />
                                 <div className="absolute inset-0 bg-black/60 flex items-center justify-center gap-1 opacity-0 group-hover/img:opacity-100 transition-opacity">
-                                    <button disabled={isGenerating} onClick={(e) => { e.stopPropagation(); onGenMetaImage(asset, asset.prompt); }} title={labels.regenerate} className="p-1 hover:text-banana-400 text-white disabled:opacity-50 disabled:cursor-not-allowed"><RefreshCw className="w-3 h-3" /></button>
+                                    <button disabled={isGenerating} onClick={(e) => { e.stopPropagation(); onGenMetaImage(asset); }} title={labels.regenerate} className="p-1 hover:text-banana-400 text-white disabled:opacity-50 disabled:cursor-not-allowed"><RefreshCw className="w-3 h-3" /></button>
                                     <button onClick={(e) => { e.stopPropagation(); onSaveImage(asset.refImageUrl!, asset.name, asset.refImageAssetId); }} title={labels.saveImage} className="p-1 hover:text-banana-400 text-white"><Download className="w-3 h-3" /></button>
                                 </div>
                             </>
@@ -70,7 +68,7 @@ const AssetRow: React.FC<AssetRowProps> = ({
 
                         {!asset.refImageUrl && (
                             <button
-                                onClick={() => onGenMetaImage(asset, asset.prompt)}
+                                onClick={() => onGenMetaImage(asset)}
                                 disabled={isGenerating || !asset.description}
                                 className={`absolute inset-0 bg-black/60 flex items-center justify-center transition-opacity ${!asset.refImageUrl ? 'opacity-100' : 'opacity-0 group-hover/img:opacity-100'}`}
                                 title={labels.genRefImage}
@@ -127,37 +125,13 @@ const AssetRow: React.FC<AssetRowProps> = ({
                     </div>
                     <textarea
                         value={asset.description}
-                        onChange={(e) => onUpdateAsset({ ...asset, description: e.target.value })}
+                        onChange={(e) => onUpdateAsset({ ...asset, description: e.target.value, prompt: undefined })}
                         placeholder={labels.assetDescPlaceholder}
                         rows={3}
                         className="w-full bg-black/30 text-gray-300 text-xs p-2 rounded border border-white/5 resize-none focus:outline-none focus:border-banana-500/30 scrollbar-thin"
                     />
 
-                    {/* Prompt Field */}
-                    <div className="mt-2 bg-black/20 p-2 rounded border border-white/5">
-                        <div className="flex justify-between items-center mb-1">
-                            <label className="text-[10px] text-gray-500 font-bold uppercase flex items-center gap-1">
-                                <Wand2 className="w-3 h-3" /> Prompt
-                            </label>
-                            <div className="flex items-center gap-1">
-                                {asset.prompt && (
-                                    <button onClick={() => navigator.clipboard.writeText(asset.prompt!)} className="text-gray-500 hover:text-white" title="Copy Prompt">
-                                        <Copy className="w-3 h-3" />
-                                    </button>
-                                )}
-                                <button onClick={() => setPromptExpanded(true)} className="text-gray-500 hover:text-banana-400" title="放大查看 Prompt">
-                                    <Maximize2 className="w-3 h-3" />
-                                </button>
-                            </div>
-                        </div>
-                        <textarea
-                            value={asset.prompt || ''}
-                            onChange={(e) => onUpdateAsset({ ...asset, prompt: e.target.value })}
-                            placeholder="Prompt used for generation..."
-                            rows={2}
-                            className="w-full bg-transparent text-gray-400 font-mono text-[10px] resize-none focus:outline-none focus:text-gray-300 scrollbar-thin"
-                        />
-                    </div>
+
 
                     <div className="mt-1 flex justify-end">
                         <label className="text-[10px] text-gray-500 hover:text-banana-400 cursor-pointer flex items-center gap-1">
@@ -175,38 +149,7 @@ const AssetRow: React.FC<AssetRowProps> = ({
                 </div>
             </div>
 
-            {/* Expanded Prompt Overlay — Portal to body to escape Virtuoso overflow:hidden */}
-            {promptExpanded && createPortal(
-                <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/70 backdrop-blur-sm" onClick={() => setPromptExpanded(false)}>
-                    <div className="w-[90vw] max-w-2xl bg-dark-800 border border-white/10 rounded-xl shadow-2xl p-6" onClick={(e) => e.stopPropagation()}>
-                        <div className="flex justify-between items-center mb-4">
-                            <div className="flex items-center gap-2 text-banana-400">
-                                <Wand2 className="w-4 h-4" />
-                                <span className="font-bold text-sm">{asset.name} — Prompt</span>
-                            </div>
-                            <div className="flex items-center gap-2">
-                                {asset.prompt && (
-                                    <button onClick={() => navigator.clipboard.writeText(asset.prompt!)} className="text-gray-400 hover:text-white p-1 rounded hover:bg-white/10" title="Copy Prompt">
-                                        <Copy className="w-4 h-4" />
-                                    </button>
-                                )}
-                                <button onClick={() => setPromptExpanded(false)} className="text-gray-400 hover:text-white p-1 rounded hover:bg-white/10">
-                                    <X className="w-4 h-4" />
-                                </button>
-                            </div>
-                        </div>
-                        <textarea
-                            autoFocus
-                            value={asset.prompt || ''}
-                            onChange={(e) => onUpdateAsset({ ...asset, prompt: e.target.value })}
-                            placeholder="Prompt used for generation..."
-                            rows={12}
-                            className="w-full bg-black/40 text-gray-200 font-mono text-sm p-4 rounded-lg border border-white/10 resize-y focus:outline-none focus:border-banana-500/50 scrollbar-thin"
-                        />
-                    </div>
-                </div>,
-                document.body
-            )}
+
         </>
     );
 };

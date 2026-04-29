@@ -24,12 +24,12 @@ export interface ScriptSegment {
 const RHYTHM_MARKER_RE = /^[-—─]{2,}\s*(.+?)\s*[-—─]{2,}$/;
 const SCENE_HEADER_RE = /^(?:【[^】]*】|第\d+场[^\n]*)/;
 const DIALOGUE_SINGLE_LINE_RE = /^(.{1,15})[：:]/;
-const MIN_MERGE_CHARS = 30;
-const MAX_ACTION_CHARS = 150;
-const DIALOGUE_LINES_PER_SEGMENT = 2;
+const MIN_MERGE_CHARS = 20; // Reduced to allow shorter punchy beats
+const MAX_ACTION_CHARS = 100; // More granular action shots
+const DIALOGUE_LINES_PER_SEGMENT = 1; // 一人一拍 principle
 
 /**
- * 将 Agent1 生成的结构化剧本拆分为原子片段
+ * 将 Agent1 生成的结构化剧本拆分为原子片段 (Atomic Splitting)
  */
 export function segmentScript(script: string): ScriptSegment[] {
     if (!script || !script.trim()) return [];
@@ -38,45 +38,24 @@ export function segmentScript(script: string): ScriptSegment[] {
     const scriptMarkerMatch = script.match(/\*\*Script\*\*\s*[:：]/i);
     if (scriptMarkerMatch && scriptMarkerMatch.index !== undefined) {
         scriptBody = script.slice(scriptMarkerMatch.index + scriptMarkerMatch[0].length);
-    } else {
-        const firstSceneOrRhythm = scriptBody.match(/(?:【[^】]*】|[-—─]{2,}\s*.+?\s*[-—─]{2,}|第\d+场)/);
-        if (firstSceneOrRhythm && firstSceneOrRhythm.index !== undefined) {
-            scriptBody = scriptBody.slice(firstSceneOrRhythm.index);
-        }
     }
 
-    // 按空行将剧本切分为多个段落区块 (Blocks)
-    const rawBlocks = scriptBody.split(/\r?\n\s*\r?\n/).filter(b => b.trim());
+    // 1. 将全文按行拆分，过滤掉空白行
+    const rawLines = scriptBody.split(/\r?\n/).map(l => l.trim()).filter(l => l);
     const segments: ScriptSegment[] = [];
     let currentScene = '';
-    let dialogueBuffer: string[] = [];
-    let dialogueChars: string[] = [];
     let segIndex = 0;
 
-    const flushDialogue = () => {
-        if (dialogueBuffer.length === 0) return;
-        segments.push({
-            index: segIndex++,
-            type: 'dialogue',
-            raw_text: dialogueBuffer.join('\n\n'),
-            scene_context: currentScene,
-            characters: [...new Set(dialogueChars)],
-        });
-        dialogueBuffer = [];
-        dialogueChars = [];
-    };
+    for (let i = 0; i < rawLines.length; i++) {
+        const line = rawLines[i];
 
-    for (const rawBlock of rawBlocks) {
-        const block = rawBlock.trim();
-
-        // 1. 节奏标记 (--- HOOK / TWIST / CLIMAX ---)
-        const rhythmMatch = block.match(RHYTHM_MARKER_RE);
+        // 2. 节奏标记 (--- HOOK ---)
+        const rhythmMatch = line.match(RHYTHM_MARKER_RE);
         if (rhythmMatch) {
-            flushDialogue();
             segments.push({
                 index: segIndex++,
                 type: 'transition',
-                raw_text: block,
+                raw_text: line,
                 scene_context: currentScene,
                 characters: [],
                 rhythm_marker: rhythmMatch[1].trim(),
@@ -84,75 +63,67 @@ export function segmentScript(script: string): ScriptSegment[] {
             continue;
         }
 
-        // 2. 场景标头 【场景：地点·时间】 或 第X场
-        if (SCENE_HEADER_RE.test(block)) {
-            flushDialogue();
-            currentScene = block.split('\n')[0].trim();
+        // 3. 场景标头 (第1场 ...) -> 强制独立
+        if (SCENE_HEADER_RE.test(line)) {
+            currentScene = line;
             segments.push({
                 index: segIndex++,
                 type: 'scene_header',
-                raw_text: block,
+                raw_text: line,
                 scene_context: currentScene,
                 characters: [],
             });
             continue;
         }
 
-        // 3. 对话区块检测 (支持单行：角色名：台词，或多行：角色名\n动作\n台词)
-        let isDialogue = false;
-        let charName = '';
-
-        const lines = block.split('\n').map(l => l.trim());
-        const singleLineMatch = block.match(DIALOGUE_SINGLE_LINE_RE);
-
-        if (singleLineMatch) {
-            isDialogue = true;
-            charName = singleLineMatch[1].trim();
-        } else if (lines.length >= 2 && lines.length <= 5) {
-            // 标准剧本格式：第一行通常是极短的角色名，且无逗号句号标点符号
-            const firstLine = lines[0];
-            if (firstLine.length >= 1 && firstLine.length <= 15 && !/[，。！？”“（）]/.test(firstLine)) {
-                // 确保后面含有真正的台词（带有引号）或动作语气（带有括号）
-                if (lines.some(l => l.startsWith('（') || l.startsWith('(') || l.includes('"') || l.includes('“') || l.includes('”'))) {
-                    isDialogue = true;
-                    charName = firstLine;
-                }
-            }
-        }
-
-        if (isDialogue) {
-            dialogueBuffer.push(block);
-            if (charName && !dialogueChars.includes(charName)) {
-                dialogueChars.push(charName);
-            }
-
-            if (dialogueBuffer.length >= DIALOGUE_LINES_PER_SEGMENT) {
-                flushDialogue();
-            }
+        // 4. 对话行 (穆医生：...) -> 强制独立
+        const dialogueMatch = line.match(DIALOGUE_SINGLE_LINE_RE);
+        if (dialogueMatch) {
+            const charName = dialogueMatch[1].trim();
+            segments.push({
+                index: segIndex++,
+                type: 'dialogue',
+                raw_text: line,
+                scene_context: currentScene,
+                characters: [charName],
+            });
             continue;
         }
 
-        // 4. 纯动作/环境描写
-        flushDialogue();
+        // 5. 动作/环境描写 (括号内或纯文本)
+        // 如果一行内有多个动作重点（由句号隔开），且长度较大，尝试再次切分
+        const sentences = line.match(/[^。！？.!?\n]+[。！？.!?\n]?/g) || [line];
+        let buffer = '';
+        
+        for (const sentence of sentences) {
+            // 如果单句就很长，或者 buffer 加上新句后超长，就切开
+            if (buffer.length + sentence.length > MAX_ACTION_CHARS && buffer.length > 0) {
+                segments.push({
+                    index: segIndex++,
+                    type: 'action',
+                    raw_text: buffer.trim(),
+                    scene_context: currentScene,
+                    characters: [],
+                });
+                buffer = sentence;
+            } else {
+                buffer += sentence;
+            }
+        }
 
-        segments.push({
-            index: segIndex++,
-            type: 'action',
-            raw_text: block,
-            scene_context: currentScene,
-            characters: [],
-        });
+        if (buffer.trim()) {
+            segments.push({
+                index: segIndex++,
+                type: 'action',
+                raw_text: buffer.trim(),
+                scene_context: currentScene,
+                characters: [],
+            });
+        }
     }
 
-    flushDialogue();
-
-    // 后处理1：强制切分超长片段（针对所有类型的片段）
-    const splittedResult = splitLongSegments(segments, 120);
-
-    // 后处理2：合并过短片段
-    const structuralResult = mergeShortSegments(splittedResult);
-
-    return structuralResult;
+    // 后处理：合并过短片段 (如小于 10 个字符且不是标题的片段，可以适当合并到下一个)
+    return mergeShortSegments(segments);
 }
 
 /**
@@ -250,8 +221,8 @@ function mergeShortSegments(segments: ScriptSegment[]): ScriptSegment[] {
     while (i < segments.length) {
         const seg = segments[i];
 
-        // transition/scene_header 不合并
-        if (seg.type === 'transition' || seg.type === 'scene_header') {
+        // transition/scene_header/dialogue 不参与合并，强制保持独立
+        if (seg.type === 'transition' || seg.type === 'scene_header' || seg.type === 'dialogue') {
             result.push(seg);
             i++;
             continue;
@@ -266,7 +237,7 @@ function mergeShortSegments(segments: ScriptSegment[]): ScriptSegment[] {
                 // 合并
                 result.push({
                     index: seg.index,
-                    type: seg.type === 'dialogue' || next.type === 'dialogue' ? 'dialogue' : 'action',
+                    type: 'action',
                     raw_text: seg.raw_text + '\n' + next.raw_text,
                     scene_context: seg.scene_context || next.scene_context,
                     characters: [...new Set([...seg.characters, ...next.characters])],
@@ -295,13 +266,14 @@ export function formatSegmentsForAnnotation(segments: ScriptSegment[]): string {
     let beatIndex = 1;
 
     for (const seg of segments) {
-        if (seg.type === 'transition' || seg.type === 'scene_header') {
+        if (seg.type === 'transition') {
             lines.push(`\n  ── ${seg.rhythm_marker || seg.raw_text.trim()} ──\n`);
         } else {
             const sid = `S${String(beatIndex).padStart(2, '0')}`;
+            const typeLabel = seg.type === 'scene_header' ? 'ESTABLISHING' : seg.type;
             const chars = seg.characters.length > 0 ? ` [角色: ${seg.characters.join(', ')}]` : '';
             const sceneCtx = seg.scene_context ? ` [场景: ${seg.scene_context.trim()}]` : '';
-            lines.push(`[${sid}] (${seg.type})${sceneCtx}${chars}\n${seg.raw_text}`);
+            lines.push(`[${sid}] (${typeLabel})${sceneCtx}${chars}\n${seg.raw_text}`);
             beatIndex++;
         }
     }
@@ -313,5 +285,5 @@ export function formatSegmentsForAnnotation(segments: ScriptSegment[]): string {
  * 统计需要生成 beat 的片段数量 (排除 transition 和 scene_header)
  */
 export function countBeatSegments(segments: ScriptSegment[]): number {
-    return segments.filter(s => s.type !== 'transition' && s.type !== 'scene_header').length;
+    return segments.filter(s => s.type !== 'transition').length;
 }

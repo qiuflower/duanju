@@ -4,7 +4,7 @@ import { Translation } from '@/services/i18n/translations';
 import { Virtuoso } from 'react-virtuoso';
 import { Plus, Wand2, Camera, Upload, Package, Pause } from 'lucide-react';
 import { generateAssetImage } from '@/services/ai';
-import { loadAssetUrl } from '@/services/storage';
+import { loadAssetUrl, loadAssetBase64 } from '@/services/storage';
 import AssetRow from './AssetRow';
 
 interface AssetLibraryProps {
@@ -77,7 +77,26 @@ const AssetLibrary: React.FC<AssetLibraryProps> = ({
             const parentAsset = asset.parentId ? assets.find(a => a.id === asset.parentId) : undefined;
             let referenceImage = parentAsset?.refImageUrl;
             if (!referenceImage && parentAsset?.refImageAssetId) {
-                referenceImage = await loadAssetUrl(parentAsset.refImageAssetId) || undefined;
+                referenceImage = await loadAssetBase64(parentAsset.refImageAssetId) || undefined;
+            }
+            if (referenceImage && referenceImage.startsWith('blob:')) {
+                // If by any chance refImageUrl is a blob URL, we need to load base64 instead
+                if (parentAsset?.refImageAssetId) {
+                    referenceImage = await loadAssetBase64(parentAsset.refImageAssetId) || undefined;
+                } else {
+                    // Fallback to fetch blob and convert to base64
+                    try {
+                        const res = await fetch(referenceImage);
+                        const blob = await res.blob();
+                        referenceImage = await new Promise((resolve) => {
+                            const reader = new FileReader();
+                            reader.onloadend = () => resolve(reader.result as string);
+                            reader.readAsDataURL(blob);
+                        }) || undefined;
+                    } catch (e) {
+                        console.error('Failed to convert blob to base64', e);
+                    }
+                }
             }
             const { imageUrl, prompt } = await generateAssetImage(asset, currentStyle, overridePrompt, referenceImage);
             onUpdateAsset({ ...asset, refImageUrl: imageUrl, prompt });
@@ -126,7 +145,24 @@ const AssetLibrary: React.FC<AssetLibraryProps> = ({
                 const parentAsset = asset.parentId ? assets.find(a => a.id === asset.parentId) : undefined;
                 let referenceImage = parentAsset?.refImageUrl;
                 if (!referenceImage && parentAsset?.refImageAssetId) {
-                    referenceImage = await loadAssetUrl(parentAsset.refImageAssetId) || undefined;
+                    referenceImage = await loadAssetBase64(parentAsset.refImageAssetId) || undefined;
+                }
+                if (referenceImage && referenceImage.startsWith('blob:')) {
+                    if (parentAsset?.refImageAssetId) {
+                        referenceImage = await loadAssetBase64(parentAsset.refImageAssetId) || undefined;
+                    } else {
+                        try {
+                            const res = await fetch(referenceImage);
+                            const blob = await res.blob();
+                            referenceImage = await new Promise((resolve) => {
+                                const reader = new FileReader();
+                                reader.onloadend = () => resolve(reader.result as string);
+                                reader.readAsDataURL(blob);
+                            }) || undefined;
+                        } catch (e) {
+                            console.error('Failed to convert blob to base64', e);
+                        }
+                    }
                 }
                 const { imageUrl, prompt } = await generateAssetImage(asset, currentStyle, undefined, referenceImage);
                 onUpdateAsset({ ...asset, refImageUrl: imageUrl, prompt });

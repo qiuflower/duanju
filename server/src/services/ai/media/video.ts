@@ -26,62 +26,27 @@ export const matchAssetsToPrompt = (prompt: string, assets: Asset[], explicitIds
         .map(s => s.asset);
 };
 
-// Build image list from @图像 tags in prompt
-// Backend version: uses passed-in scene data instead of storage loading
-const buildImageListFromTags = async (
-    prompt: string, sceneImage: string, assets: Asset[], allScenes: Scene[] = []
-): Promise<string[]> => {
-    const tags = extractAssetTags(prompt);
-    const seen = new Set<string>();
-    const unique = tags.filter(t => {
-        const key = t.id || t.name;
-        if (seen.has(key)) return false;
-        seen.add(key);
-        return true;
-    });
-    if (unique.length === 0) return [];
+// Backend tag resolution removed. Handled by exact SSOT from frontend.
 
-    const results: string[] = [];
-    const resolvedSceneIds = new Set<string>();
-    for (const tag of unique) {
-        if (isStoryboardTag(tag.name)) {
-            const idPart = tag.name.replace('分镜', '');
-            const targetScene = allScenes.find(s => s.id === idPart)
-                || allScenes.find(s => s.id.endsWith(`_${idPart}`) || s.id === idPart);
-            if (targetScene) {
-                if (resolvedSceneIds.has(targetScene.id)) continue;
-                resolvedSceneIds.add(targetScene.id);
-                // Backend: use imageUrl directly (no IndexedDB loading)
-                if (targetScene.imageUrl) {
-                    results.push(targetScene.imageUrl);
-                    continue;
-                }
-            }
-            console.warn(`[VideoGen] Storyboard tag @图像_${tag.name} could not resolve to an image`);
-            continue;
-        }
-        const asset = resolveTagToAsset(tag, assets);
-        if (asset?.refImageUrl) {
-            results.push(asset.refImageUrl);
-        }
-    }
-    return results;
-};
-
-export const constructVideoPrompt = (scene: Scene, globalStyle?: GlobalStyle): string => {
+export const constructVideoPrompt = (scene: Scene, globalStyle?: GlobalStyle, optionId?: string): string => {
     const stylePrefix = globalStyle?.visualTags ? `${globalStyle.visualTags}. ` : "";
     let finalPrompt = "";
+    
+    const option = optionId && scene.prompt_options ? scene.prompt_options.find((o: any) => o.option_id === optionId) : null;
+    const basePrompt = option ? (option.video_prompt || option.np_prompt || "") : (scene.video_prompt || scene.visual_desc || "");
 
-    if (scene.video_prompt) {
-        if (stylePrefix && !scene.video_prompt.startsWith(stylePrefix.trim())) {
-            finalPrompt = `${stylePrefix}${scene.video_prompt}`;
+    if (basePrompt) {
+        if (stylePrefix && !basePrompt.startsWith(stylePrefix.trim())) {
+            // Check if basePrompt starts with a duration tag like "0-8s:" or "0-4s:"
+            const durationMatch = basePrompt.match(/^(\d+-\d+s:\s*)/i);
+            if (durationMatch) {
+                // Insert style prefix AFTER the duration tag
+                finalPrompt = `${durationMatch[1]}${stylePrefix}${basePrompt.slice(durationMatch[0].length)}`;
+            } else {
+                finalPrompt = `${stylePrefix}${basePrompt}`;
+            }
         } else {
-            finalPrompt = scene.video_prompt;
-        }
-    } else {
-        finalPrompt = scene.visual_desc || "";
-        if (stylePrefix) {
-            finalPrompt = `${stylePrefix}${finalPrompt}`;
+            finalPrompt = basePrompt;
         }
     }
 
@@ -117,9 +82,10 @@ export const submitVideoGeneration = async (
     aspectRatio: '16:9' | '9:16' = '16:9',
     assets: Asset[] = [],
     globalStyle?: GlobalStyle,
-    allScenes: Scene[] = []
+    allScenes: Scene[] = [], // Legacy parameter, kept for signature compatibility
+    optionId?: string
 ): Promise<{ taskId: string; operation: any }> => {
-    const fullPrompt = constructVideoPrompt(scene, globalStyle);
+    const fullPrompt = constructVideoPrompt(scene, globalStyle, optionId);
     const safePrompt = stripAssetTags(fullPrompt).substring(0, 800);
     const enhancePrompt = /[^\x00-\x7F]/.test(safePrompt);
 
@@ -136,30 +102,14 @@ export const submitVideoGeneration = async (
             }
         }
     } else {
-        const tagImages = await buildImageListFromTags(fullPrompt, imageBase64, assets, allScenes);
-        console.log('[VideoGen] Tier 1 @图像 tags found:', tagImages.length);
-
-        if (tagImages.length > 0) {
-            imagesToSend = tagImages;
-        } else {
-            const useAssets = scene.useAssets !== false;
-            if (useAssets && scene.videoAssetIds !== undefined) {
-                const selectedAssets = assets.filter(a => scene.videoAssetIds!.includes(a.id) && a.refImageUrl);
-                if (selectedAssets.length > 0) {
-                    imagesToSend = selectedAssets.map(a => a.refImageUrl || "");
+        // SSOT: Direct consumption of Frontend Pre-packaged payload
+        if (assets && assets.length > 0) {
+            assets.forEach(a => {
+                if (a.refImageUrl || a.refImageAssetId) {
+                    imagesToSend.push((a.refImageUrl || a.refImageAssetId) as string);
                 }
-                const currentSceneAssetId = `scene_img_${scene.id}`;
-                if (imageBase64) {
-                    const currentSceneSelected = scene.videoAssetIds.includes(currentSceneAssetId);
-                    if (currentSceneSelected || imagesToSend.length < 3) {
-                        imagesToSend.push(imageBase64);
-                    }
-                }
-            }
-
-            if (imagesToSend.length === 0 && imageBase64) {
-                imagesToSend.push(imageBase64);
-            }
+            });
+            console.log(`[VideoGen] Added ${assets.length} standard Asset references.`);
         }
     }
 

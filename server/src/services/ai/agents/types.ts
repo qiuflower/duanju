@@ -1,5 +1,6 @@
 export interface Beat {
     beat_id: string;
+    raw_text: string;
     shot_id: string;
     shot_name?: string;
     visual_action: string;
@@ -10,11 +11,13 @@ export interface Beat {
     narrative_function: string;
     cause_from: string;
     emotional_intensity: number;
+    spatial_pos?: string; // e.g. "Stage Left", "Center", "Foreground Right"
 }
 
 export interface MasterBeatSheet {
     visual_strategy?: {
         core_atmosphere: string;
+        spatial_setup?: string; // "Virtual Stage" configuration
         key_lens_design: {
             opening_hook: string;
             metaphor: string;

@@ -78,6 +78,8 @@ describe('isStoryboardTag', () => {
     it('matches 分镜S99', () => { expect(isStoryboardTag('分镜S99')).toBe(true); });
     it('matches 分镜E1_S01 (episode prefix)', () => { expect(isStoryboardTag('分镜E1_S01')).toBe(true); });
     it('matches 分镜E12_S05', () => { expect(isStoryboardTag('分镜E12_S05')).toBe(true); });
+    it('matches with suffix like -A', () => { expect(isStoryboardTag('分镜E1_S01-A')).toBe(true); });
+    it('matches with suffix like -B2', () => { expect(isStoryboardTag('分镜S01-B2')).toBe(true); });
     it('rejects regular names', () => {
         expect(isStoryboardTag('岑矜')).toBe(false);
         expect(isStoryboardTag('大殿')).toBe(false);
@@ -137,14 +139,14 @@ describe('resolveTagToAsset', () => {
 // injectTagIds
 // ────────────────────────────────────────────
 describe('injectTagIds', () => {
-    it('adds #id to tags that match assets', () => { expect(injectTagIds('参考 @图像_岑矜 生成', CANDIDATES)).toBe('参考 @图像_岑矜#hero_base 生成'); });
-    it('preserves existing #id anchors', () => { expect(injectTagIds('@图像_岑矜#hero_base', CANDIDATES)).toBe('@图像_岑矜#hero_base'); });
-    it('skips storyboard tags', () => { expect(injectTagIds('@图像_分镜S05', CANDIDATES)).toBe('@图像_分镜S05'); });
+    it('adds #id to tags that match assets', () => { expect(injectTagIds('参考 @图像_岑矜 生成', CANDIDATES)).toBe('参考 [@图像_岑矜#hero_base] 生成'); });
+    it('preserves existing #id anchors', () => { expect(injectTagIds('@图像_岑矜#hero_base', CANDIDATES)).toBe('[@图像_岑矜#hero_base]'); });
+    it('skips storyboard tags', () => { expect(injectTagIds('@图像_分镜S05', CANDIDATES)).toBe('[@图像_分镜S05]'); });
     it('leaves unmatched tags unchanged', () => { expect(injectTagIds('@图像_不存在的人', CANDIDATES)).toBe('@图像_不存在的人'); });
     it('handles empty string', () => { expect(injectTagIds('', CANDIDATES)).toBe(''); });
     it('handles multiple mixed tags', () => {
         const text = '@图像_岑矜 和 @图像_沈璃#heroine_base 和 @图像_分镜S01';
-        expect(injectTagIds(text, CANDIDATES)).toBe('@图像_岑矜#hero_base 和 @图像_沈璃#heroine_base 和 @图像_分镜S01');
+        expect(injectTagIds(text, CANDIDATES)).toBe('[@图像_岑矜#hero_base] 和 [@图像_沈璃#heroine_base] 和 [@图像_分镜S01]');
     });
 });
 

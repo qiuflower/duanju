@@ -95,7 +95,7 @@ export function useSessionRestore(state: SessionState) {
         const timeoutId = setTimeout(() => {
             saveState(STATE_KEY, { globalAssets, chunks, globalStyle, language, filename })
                 .catch(e => console.error("Failed to save state", e));
-        }, 1000);
+        }, 200);
         return () => clearTimeout(timeoutId);
     }, [globalAssets, chunks, globalStyle, language, filename, isRestored]);
 

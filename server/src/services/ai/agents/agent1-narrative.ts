@@ -49,7 +49,7 @@ export const runAgent1_NarrativeAnalysis = async (
 
     let allEpisodes: any[] = [];
     let finalBatchMeta: any = { narrative_state: { current_tension: "Low", open_loops: [] } };
-    let currentContext = prevContext;
+    let latestCliffhanger = "";
 
     for (let i = 0; i < batches.length; i++) {
         const batch = batches[i];
@@ -78,23 +78,6 @@ export const runAgent1_NarrativeAnalysis = async (
         } else {
             episodeInstruction = "- **智能分集**: 根据输入文本的体量和剧情起伏，将其自动划分为 N 集（每集 3-5 分钟）。";
         }
-
-        let batchContext = currentContext;
-        if (i > 0 && allEpisodes.length > 0) {
-            const lastEp = allEpisodes[allEpisodes.length - 1];
-            batchContext += `\n\n[Previous Batch Summary]: Ended at Episode ${lastEp.episode_number}. \nLast Episode Script Ending: "${(lastEp.script || '').slice(-200)}". \n\n**INSTRUCTION**: You MUST start Episode ${lastEp.episode_number + 1} by resolving or escalating the cliffhanger from the previous episode. Maintain seamless narrative continuity. Do NOT restart the story.`;
-        }
-
-        const sysPrompt = PROMPTS.AGENT_1_NARRATIVE({
-            batchInstruction: episodeInstruction,
-            language,
-            text,
-            prevContext: batchContext,
-            isBatched: isSplitMode,
-            episodeRange,
-            currentBatchNum,
-            totalBatches
-        });
 
         const narrativeSchema = {
             type: Type.OBJECT,
@@ -158,6 +141,19 @@ export const runAgent1_NarrativeAnalysis = async (
                     onProgress(`[Agent1][Batch ${currentBatchNum}/${totalBatches}][Retry ${attempt}/${MAX_BATCH_RETRIES}]...`);
                 }
 
+                const combinedContext = prevContext + (latestCliffhanger ? `\n\n${latestCliffhanger}` : "");
+
+                const sysPrompt = PROMPTS.AGENT_1_NARRATIVE({
+                    batchInstruction: episodeInstruction,
+                    language,
+                    text,
+                    prevContext: combinedContext,
+                    isBatched: isSplitMode,
+                    episodeRange,
+                    currentBatchNum,
+                    totalBatches
+                });
+
                 const response = await retryWithBackoff<GenerateContentResponse>(() => ai.models.generateContent({
                     model: MODELS.TEXT_FAST,
                     contents: { parts: [{ text: `Analyze the text and generate COMPLETE SCREENPLAY SCRIPTS (剧本) for ${episodeRange}. Each episode MUST have a full 'script' field (≥3000 chars, target 5000+). The script field must NOT be empty.` }] },
@@ -213,6 +209,9 @@ export const runAgent1_NarrativeAnalysis = async (
                     if (validEpisodes.length > 0) {
                         allEpisodes.push(...validEpisodes);
                         finalBatchMeta = result.batch_meta;
+
+                        const lastEp = validEpisodes[validEpisodes.length - 1];
+                        latestCliffhanger = `[Previous Batch Summary]: Ended at Episode ${lastEp.episode_number}. \nLast Episode Script Ending: "${(lastEp.script || '').slice(-200)}". \n\n**INSTRUCTION**: You MUST start Episode ${lastEp.episode_number + 1} by resolving or escalating the cliffhanger from the previous episode. Maintain seamless narrative continuity. Do NOT restart the story.`;
 
                         if (onBatchComplete) {
                             onBatchComplete(validEpisodes, finalBatchMeta);

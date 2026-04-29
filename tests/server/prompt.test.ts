@@ -153,21 +153,21 @@ describe('PROMPTS', () => {
         });
     });
 
-    describe('AGENT_2_VISUAL', () => {
+    describe('AGENT_2_ANNOTATE', () => {
         it('should return a non-empty string', () => {
-            const result = PROMPTS.AGENT_2_VISUAL('Chinese', 'lens_library_data');
+            const result = PROMPTS.AGENT_2_ANNOTATE('Chinese', 'lens_library_data', 10);
             expect(typeof result).toBe('string');
             expect(result.length).toBeGreaterThan(0);
         });
 
         it('should include lens library data', () => {
-            const result = PROMPTS.AGENT_2_VISUAL('Chinese', 'LENS_LIBRARY_CONTENT');
+            const result = PROMPTS.AGENT_2_ANNOTATE('Chinese', 'LENS_LIBRARY_CONTENT', 10);
             expect(result).toContain('LENS_LIBRARY_CONTENT');
         });
 
-        it('should include original script when provided', () => {
-            const result = PROMPTS.AGENT_2_VISUAL('Chinese', 'lens', '原始小说文本');
-            expect(result).toContain('原始小说文本');
+        it('should include original script concept (segment count)', () => {
+            const result = PROMPTS.AGENT_2_ANNOTATE('Chinese', 'lens', 15);
+            expect(result).toContain('15');
         });
     });
 

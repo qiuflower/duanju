@@ -23,17 +23,21 @@ Example: { "visual_dna": "[Digital Art][Cyberpunk][Neon & Dark][Volumetric Light
 `;
 
 const ASSET_DESCRIPTION_RULES = `
-   - **character**: 只写**稳定的物理身份特征**（发型发色、五官、体型、标志性服饰、年龄段）。生物类写物种、体型、颜色、标志性特征。
-     ✅ "黑发青年，剑眉星目，身材修长，常穿白色长衫，腰佩青铜长剑，约20岁"
-     ✅ "银白色巨龙，双翼展开约十米，鳞片如镜面反光，眼瞳金色竖瞳"
-     ✗ 禁止写瞬时状态（表情、动作、伤痕、情绪）
-   - **item**: 写**材质、尺寸、颜色、形状、标志性细节**。载具写型号/结构，特效写颜色/形态/亮度。
-     ✅ "三尺青铜长剑，剑身刻有云纹，剑柄缠黑色皮绳，剑鞘为深红漆木"
-     ✅ "湛蓝色电子流，表现为像素化的粒子矩阵，高频闪烁，科技感强烈"
-   - **location**: 写**空间结构、光线、材质、氛围**。
-     必须包含 空间结构（室内/室外/大小）+ 主要陈设/地标 + 光线方向与色温 + 材质（石/木/泥/金属）+ 天气/时间氛围
-     ✅ "破旧泥砖土屋，低矮的茅草屋顶漏光，室内昏暗，一张歪斜木桌上堆满药碗，地面潮湿泥泞，墙角堆着干稻草，门外透进黄昏暖光"
-     ✗ "村中屋子"（过于简略，图像模型无法还原）
+【资产描述词必须严格按照以下公式和示例编写，不得包含多余的抽象剧情和动作描述】：
+
+1. 角色类 (character)
+格式：[发色发型]，[五官特征]，[体型特征]，身穿[具体颜色+材质+款式]，[年龄段]。
+成品示例：银色长直发齐腰，淡紫色眼瞳，身材高挑纤细。身穿深紫色皮革抹胸，外搭黑纱长袍，脚蹬暗银色金属长靴，约25岁女性。
+莫名其极：禁止写任何瞬时表情、动作、伤痕。禁止写任何抽象身份、性格（如"负责审判"）或时间线变化。一个资产只能有一套固定长相！
+
+2. 物品类 (item)
+格式：[形状尺寸]+[材质]，[主色调]，[标志性细节+光源]。
+成品示例：长约一米的菱形晶体权杖，材质为半透明磨砂玻璃。通体呈冰蓝色，杖头包裹着金色镂空藤蔓金属件，内部散发微弱的白色冷光。
+
+3. 场景类 (location)
+格式：[室内/室外+空间结构]，中心为[主要地标]，[光影方向/色温]，[地面/墙面材质]，[天气/时间]。
+成品示例：室内圆形岩石洞穴，中心有一潭深蓝色圆形湖泊。光线从顶部裂缝斜射入内，呈现5000K冷白光，墙壁为潮湿的黑色玄武岩，水面平滑如镜，空气中漂浮着白色水雾。
+莫名其极：禁止在场景描述中包含任何人物动作或剧情活动描述。
 `;
 
 // --- Type Definitions ---
@@ -50,12 +54,12 @@ export interface Agent1NarrativeConfig {
 }
 
 interface PromptFunctions {
-  AGENT_A_DNA: (workStyle: string, textureStyle: string, language: string) => string;
+  AGENT_A_DNA: (workStyle: string, textureStyle: string, language: string, useOriginalCharacters?: boolean) => string;
   AGENT_A_ASSET: (language: string, existingAssets: Asset[], workStyle?: string, useOriginalCharacters?: boolean) => string;
   AGENT_A2_FROM_BEATS: (language: string, existingAssets: Asset[], workStyle?: string, useOriginalCharacters?: boolean) => string;
   VISUAL_DNA_FROM_IMAGES: (language: string) => string;
   AGENT_1_NARRATIVE: (config: Agent1NarrativeConfig) => string;
-  AGENT_2_ANNOTATE: (language: string, lensLibraryPrompt: string, segmentCount: number) => string;
+  AGENT_2_ANNOTATE: (language: string, lensLibraryPrompt: string, visualDna: string, narrativeContext: string) => string;
   AGENT_3_ASSET_PRODUCER: (fullLensLibrary: string, language: string, stylePrefix: string, assetMap: string, aspectRatio?: string) => string;
 }
 
@@ -63,12 +67,16 @@ interface PromptFunctions {
 
 export const PROMPTS: PromptFunctions = {
   // --- VISUAL DNA & ASSETS (AGENT A) ---
-  AGENT_A_DNA: (workStyle: string, textureStyle: string, language: string) => `
+  AGENT_A_DNA: (workStyle: string, textureStyle: string, language: string, useOriginalCharacters: boolean = false) => `
 You are **Agent A1: The Visual Director**.
 Goal: Define a Global Visual DNA string based on the Style Reference: "${workStyle}" and Texture Reference: "${textureStyle}".
 Analyze the input styles to extract the 5 core visual features.
+**If Reference Images are provided**: You MUST deeply analyze their texture, lighting, color scheme, and art style. Merge these visual qualities seamlessly with the textual references to form the final DNA.
 **Language**: The content inside brackets MUST be in ${language}.
 ${VISUAL_DNA_RULES}
+${useOriginalCharacters && workStyle ? `
+**1:1 RESTORE OVERRIDE**: Because the user checked 1:1 original restoration, YOU MUST APPEND the literal work name as the final bracket tags.
+Example output format: "[Art Medium][Era Style][Color Scheme][Lighting Features][Texture Details][《${workStyle}》风格], "` : ''}
 `,
 
   AGENT_A_ASSET: (language: string, existingAssets: Asset[], workStyle: string = "", useOriginalCharacters: boolean = false) => {
@@ -189,17 +197,27 @@ System Prompt: Agent 1 - 叙事架构师 (The Narrative Architect)
 3. Script Formatting (⚠️ 剧本排版与写法要求)
 - 语言: 必须使用 ${language}。
 - 完整性: **绝对拒绝缩写！禁止使用省略号"……"概括剧情！** 必须写出每一个关键动作、每一句对话、微表情及场景转换。
-- 字数: 剧本文本 (script字段) 每集必须达到 **3000-5000字**，低于3000字视为失败。
-- 排版标准(极度重要): 必须采用严格的中文影视剧本格式（纯净无节奏标签），规则如下：
-  1. 场景标头：格式为："第X场 内景/外景 场景地 — 日/夜"
-  2. 环境与动作：另起一段，尽量用全角括号（）包裹
-  3. 角色与台词：角色名单独一行，对应台词单独一行；表情/语气用括号紧跟角色名下方。
+- 💥 事件密度约束 (Event Density): 绝对禁止使用废话与无关紧要的啰嗦对话拼接字数！你的剧本每集必须包含至少 3-4 次推动主线实质性进展、或激烈的场景调度的核心事件。通过写出精细入微的人物微表情与极具张力的物理动作来使得剧本足够充实。
+- 排版标准(极度重要): 必须采用严格的影视剧本格式，绝对遵守以下两大规则：
+  1. 【要素说明表】: 每一集（或每一场单独戏份）开头，必须清晰打出如下要素：① 场号 ② 时间 ③ 环境 ④ 地点 ⑤ 出场人物 包括 道具。
+  2. 【视觉锚点 △ 法则】: 剧本中所有的画面描述、人物物理动作、镜头转换等视觉要素，**必须强行统一使用“△”符号（读作：Delta）作为当前自然段的开头！** “△”代表了一个独立的动作或视听单元，它是后续人工智能切分分镜的绝对起步锚点！人物的对白无需加“△”。
+  
   格式示例：
-  第1场 外景 悬崖边 — 黄昏
-  （夕阳如血，狂风猎猎。李明站在崖边，双拳紧握。）
-  李明
-  （压抑、低沉）
-  "你以为……你杀得了我吗？"
+  要素说明：
+  ① 场号：1-1
+  ② 时间：夜
+  ③ 环境：外
+  ④ 地点：五指山废弃监狱外围
+  ⑤ 出场人物：唐森、黑衣保镖A、孙悟空
+  道具：生锈铁棍
+  
+  △ 暴雨如注，警笛声刺破夜空。
+  △ 唐森浑身是血，踉跄奔逃，身后是几辆黑色越野车紧追不舍。
+  △ 几名黑衣保镖（妖魔化身）跳下车，手持利刃逼近。
+  
+  黑衣保镖A（狞笑）：唐少爷，跑什么？把东西交出来，给你个痛快。
+  
+  △ 唐森慌不择路，撞开一扇生锈的铁门，滚入一个巨大的废弃深坑。
 
 Input Text:
 "${text}"
@@ -234,7 +252,7 @@ ${isBatched ? `**Batch Context**: Currently generating ${episodeRange}.` : ""}
         "twists": ["[第一个反转]", "[第二个反转]"],
         "cliffhanger": "[最后10秒情绪最高点的断章设计]"
       },
-      "script": "【范例，务必纯净无标签排版】\n第1场 外景 悬崖边 — 黄昏\n\n（狂风呼啸，碎石落入深渊。）\n\n角色甲\n（动作/表情）\n\"完整台词\"\n\n（更多动作与环境调度...）\n\n第2场 内景 密室 — 夜\n...",
+      "script": "【要求：严格按照要素表和△符号排版】\\n要素说明：\\n① 场号：1-1\\n② 时间：夜\\n③ 环境：外\\n④ 地点：五指山废弃监狱外围\\n...\\n\\n△ 几名黑衣保镖（妖魔化身）跳下车，手持利刃逼近。\\n\\n黑衣保镖A（狞笑）：唐少爷，跑什么？把东西交出来，给你个痛快。\\n\\n△ 唐森慌不择路，撞开一扇生锈的铁门，滚入一个巨大的废弃深坑。...",
       "character_instructions": {
         "CHAR_ID_A": "[本集心理状态]"
       },
@@ -244,63 +262,72 @@ ${isBatched ? `**Batch Context**: Currently generating ${episodeRange}.` : ""}
 }
 `,
 
-  // --- AGENT 2: ANNOTATE MODE (标注模式) ---
-  AGENT_2_ANNOTATE: (language: string, lensLibraryPrompt: string, segmentCount: number) => `
+  // --- AGENT 2: 叙事导演与剪辑模式 2.2 (纯净专业版) ---
+  AGENT_2_ANNOTATE: (language: string, lensLibraryPrompt: string, visualDna: string, narrativeContext: string) => `
 
-1. Role (角色)
-你是分镜标注师。你将收到已拆分好的 ${segmentCount} 个剧本片段。
-每个片段已预编号 [Sxx]，你的任务是为每个片段标注最佳镜头语言。
+1. 角色定位
+你是一位拥有20年经验、擅长精准剪辑与镜头调度的导演。你的任务是将原始剧本拆解为一连串极具张力的**分镜 (Beats)**。
 
-⚠️ 绝对铁律 (ABSOLUTE RULES):
-1. **数量守恒**: 输入 ${segmentCount} 个片段 → 必须输出恰好 ${segmentCount} 个 beats。禁止合并、删除或拆分任何片段！少一个或多一个都是失败！
-2. **原文拼接方案革命 (CRITICAL)**: 
-   - 你**绝对不需要**在 \`visual_action\` 中重抄或引用原文！系统已经通过底层代码接管了原文。
-   - 你的任务是扮演专业摄影指导，**纯粹补充**该分镜的视觉表现细节（如镜头光影、主体姿态、材质反光、画面氛围）。
-3. **ID 严格对应**: beat_id 必须与片段编号一一匹配 (片段 [S01] → beat_id: "S01", [S02] → "S02", ...)
-4. **镜头选择**: 从核心镜头库 (ID 001-400) 中选择最匹配的 shot_id，禁止编造不存在的 ID
+2. 核心任务
+- **输入**: 系统前置代码切分好的分镜列表文本，每个分镜带有形如 '[Beat S01]' 的严格编号。
+- **任务目标**: 
+  1. **纯参数填充**: 文本的切分工作已经原封不动保留并完成锁定！你的任务仅仅是依据传给你的每一个分镜的 'beat_id'，独立思考并填充其对应的影视导演参数。
+  2. **无需抄写台词**: 最终输出的 JSON 结构里移除了 'raw_text'。你不需要返回任何原剧本台词文本，这能帮你大幅减负，请务必只专注于给出 'camera_movement', 'lighting', 'visual_action' 等视觉指导信息。
 
-2. Lens Library (核心镜头组)
+3. 导演协议 (核心约束)
+⚠️ **绝对严谨的坑位对齐**: 
+- 系统给你输入了几个标有 '[Beat SXX]' 编号的分镜片段，你就必须在输出的 JSON 中生成与之**一对一完全对应**的参数对象。
+- 严禁自行合并、缩减、遗漏，也严禁自创未提供的前后文分镜！你的 'beats' 数组长度和 'beat_id' 必须和输入分毫不差。
+
+⚠️ **视听语言工业化**:
+- **专业词库**: 必须使用电影级词汇（如：伦勃朗光、丁达尔效应、视线对齐、景深分割）。
+- **画面描述**: 在 \`visual_action\` 中，专注于**光影 (Light)**、**材质 (Texture)** 和 **构图 (Composition)**。
+- **声音设计**: \`audio_subtext\` 应当包含具体的环境拟音 (Foley) 和 BGM 建议。
+
+⚠️ **Few-Shot 参数填空示例**:
+*   *输入片段*: 
+    [Beat S01]
+    △ 几名黑衣保镖（妖魔化身）跳下车，手持利刃逼近。
+    黑衣保镖A（狞笑）：唐少爷，跑什么？把东西交出来，给你个痛快。
+    
+    [Beat S02]
+    △ 唐森慌不择路，撞开一扇生锈的铁门，滚入一个巨大的废弃深坑。
+
+*   *大模型只需输出的 JSON 节点元素*: 
+    - [S01] visual_action: "几名魁梧的黑衣保镖跳下越野车，手中利刃反光。特写他们狰狞的表情。", camera_movement: "Low Angle Push-in", ...
+    - [S02] visual_action: "唐森惊恐地撞开斑驳的生锈铁门，身体失衡落入黑暗深邃的坑洞。", camera_movement: "Following Tilt Down", ...
+
+
+⚠️ **空间感知与轴线**:
+- 必须明确定义虚拟舞台的左右位置，确保正反打镜头视线对齐，严禁跳轴。
+
+4. 镜头库支持
 ${lensLibraryPrompt}
 
-3. 标注要求
-对每个片段，你需要标注：
-- **shot_id**: 最匹配的镜头 ID (001-400)
-- **shot_name**: 镜头英文名称
-- **camera_movement**: 运镜方式 (Static/Pan/Push in/Pull out/Dolly/Tracking/Crane/Handheld/Whip Pan/Steadicam)
-- **lighting**: 光影设计 (如 Rim Light/Neon/Natural/Low-key/High-key/Chiaroscuro/Golden Hour)
-- **audio_subtext**: 音效或环境音 (如 "SFX: 剑鸣声", "AMB: 雨声")
-- **narrative_function**: Setup | Tension | Twist | Climax | Resolution | Cliffhanger
-- **cause_from**: 首个填 "HOOK"，其余必须填直接前驱 beat_id
-- **emotional_intensity**: 1-10 的情感张力值
-- **duration**: 时长 ("4s"-"15s")，对话多用 10-15s，动作用 4-15s，定场用 6-15s
+5. 输出规范
+- **语言**: 必须使用 ${language}。
+- **背景**: 【视觉 DNA】: ${visualDna} | 【叙事脉络】: ${narrativeContext}
 
-4. 镜头选择策略
-- scene_header (定场) → 优先大远景/远景 (001-010)
-- dialogue (对话) → 优先 OTS/双人镜头/正反打 (081-100)
-- action (动作) → 根据动作类型选：追逐用 Tracking (041-060)，打斗用 Handheld/Whip (201-240)
-- 相邻 beat 禁止使用相同 shot_id，确保视觉节奏感
-- 每 5 个 beat 至少使用 1 个高级镜头 (ID > 080)
-
-5. Output JSON Schema
-**CRITICAL RULE**: Output exactly ONE valid JSON object in ${language}.
+6. JSON 输出格式
+请输出唯一的 JSON 对象:
 {
   "visual_strategy": {
-    "core_atmosphere": "[核心氛围]",
-    "key_lens_design": { "opening_hook": "[起幅策略]", "metaphor": "[隐喻策略]" }
+    "core_atmosphere": "[视角氛围设计]",
+    "spatial_setup": "[明确定义人物在舞台上的左右位置关系]",
+    "key_lens_design": { "opening_hook": "[起幅策略]", "metaphor": "[核心视觉隐喻]" }
   },
   "beats": [
     {
       "beat_id": "S01",
       "shot_id": "001",
       "shot_name": "Establishing Shot",
-      "visual_action": "侧逆光勾勒出角色的轮廓，手持微晃增加紧迫感，冷色调灰蓝环境光",
+      "visual_action": "[画面细节描写，专注光影与构图]",
+      "spatial_pos": "[主体位置，如 Stage Left]",
       "camera_movement": "Slow Pan",
-      "lighting": "Golden Hour",
-      "audio_subtext": "AMB: 远处马蹄声",
-      "narrative_function": "Setup",
-      "cause_from": "HOOK",
-      "emotional_intensity": 5,
-      "duration": "8s"
+      "lighting": "Cinematic Rim Light",
+      "audio_subtext": "音效/BGM建议",
+      "narrative_function": "Setup | Tension | Twist | Climax",
+      "emotional_intensity": 5
     }
   ]
 }
@@ -310,99 +337,90 @@ ${lensLibraryPrompt}
   AGENT_3_ASSET_PRODUCER: (fullLensLibrary: string, language: string, stylePrefix: string, assetMap: string, aspectRatio: string = '16:9') => `
 
 1. Role & Core Mission (角色与核心任务)
-你是“AI 图像和视频提示词工程师”。
-任务是将 Agent 2 的分镜表的每个 beat 翻译为nano banana pro 图像模型和seedance 2.0视频模型可直接渲染的**具体画面或视频描述（提示词）**。
-
+你是“拥有百万阅片量，纵览影史长河的顶尖电影摄影指导（Cinematographer）”与提示词工程师。
+针对传入的每个分镜表(beat)，你必须在大脑影视库中搜索寻找 3 个经典影视/真实实拍镜头片段作为参考。
+⚠️ 【99% 匹配度底线】：只允许挑选剧情动作、物理法则、情绪张力与当前分镜匹配度高达 99% 的镜头！如果名场面不搭，哪怕去寻找小众电影或高赞短片，也绝不允许生搬硬套。宁可找一段“极其普通的实拍推轨镜头”，也决不能给出牵强附会的不匹配案例。
 Reference Dictionary (镜头组翻译对照):
 ${fullLensLibrary}
 
-2. Golden Rules (⚠️ 黄金准则)
-- **@图像 标签必须用方括号 [] 包裹！** 方括号提供明确的边界，系统依赖它来正确解析。
-- **资产引用格式**: [@图像_显示名#资产ID]。✅ [@图像_岑矜#hero_base]  ✗ @图像_岑矜（缺少[]和#id）
-- **分镜引用格式**: [@图像_分镜Sxx]（无需 #id）。✅ [@图像_分镜S06]  ✗ 分镜S06（缺少[@图像_]前缀）
+2. 💥 The Rule of 3 Options (3套真实运镜调度方案)
+你在 json 解析时必须把原有的单个提示词，变为嵌入在 prompt_options 数组中的 3 个不同实拍参考方案：
+ - 方案 A (参考真实影视镜头 A，用其语境改写本次的运镜与提示词)
+ - 方案 B (参考真实影视镜头 B)
+ - 方案 C (参考真实影视镜头 C)
+为防幻觉出现无效死链接，对于每个方案的 \`lens_reference\` 对象必须满足：
+ - \`description\`: 简述模仿的这段原片的调度精髓
+ - \`searchKeyword\`: 提供最符合视频网站（B站/YT）搜索引擎算法的高配搜索关键词。⚠️ 切记：必须是纯名词/动词的空格组合，绝对禁止出现任何标点符号、书名号《》或长句描述，务必附带“片段”、“原片”或“scene”等搜片专用词汇。例如："盗梦空间 走廊 失重 战斗 电影片段" 或 "Inception hallway zero gravity scene"
+ - \`video_url\`: 存放获取到的真实影片链接地址
+ - \`timestamp\`: 明确写出原片该事件出现的确切时长节点
+
+⚠️ 【强联网搜索铁律】(MANDATORY WEB SEARCH PROTOCOL)
+针对每一次分镜设计，请务必明确调用你的 Google Search 扩展程序，查找并返回真实的视频链接。绝对禁止纯凭记忆去编造 \`video_url\`！你必须严格执行以下工作流：
+1. 在大脑中构思好你要致敬的 3 个经典/大师实拍镜头方案（A/B/C）。
+2. **指定搜索特定平台**：请在 YouTube（油管）或 Vimeo 等视频库平台搜索关于“该片名+绝佳名场面”的原片或解析视频，过滤掉毫无关联的结果。
+3. **强制要求“原始 URL”**：搜索到目标网页后，在 \`video_url\` 字段中直接列出确切且可访问的原始网页 URL（必须以 https:// 开头）。不要使用 Google 的卡片或重定向格式！
+4. **生死红线 (LETHAL REQUIREMENT)**: 对比你的回答和实时搜索结果。如果**无法百分之百确认**该原始 URL 当下依然真实有效，**请直接将该条方案的 \`video_url\` 严格置为空字符串 ""，也绝对不允许**随意瞎编一个乱码网址来凑数！
+5. 基于你检索并读取到的这则视频，精准算出当前所用画面在该视频中发生的时间段 \`timestamp\`（并简要说明）。这也能反向验证你是否真的找到了视频！
+
+⚠️ 【绝对反克隆协议】(ANTI-CLONE PROTOCOL)
+绝对禁止直接复制粘贴！大特写、全景、跟拍所呈现的画面是截然不同的！方案A、B、C的 \`video_prompt\` 和 \`np_prompt\` 必须基于各自选择的不同机位与调度，呈现出**截然不同**的画面视角与动作编排。如果三个选项的画面描述长得一模一样，或者只是改了个词，这将视为极度恶劣的违规护栏失败！
+
+3. Golden Rules (⚠️ 黄金准则 - 角色与场景)
 - 每个 beat 列出出场角色与场景 → 优先将“场景环境”搭配 1-2 个核心角色写入 prompt。
+- 【绝对命名准则】：在提到角色或道具时，**必须一字不差地完整使用 Available Assets 下列出的专有名称！**。绝对不可自创缩写（如：把“中巴车内部”写成“车内”），绝对不可添加前后缀（如：把“Z”写成“老Z”）。后续有一套工业级标尺扫描系统严格比对你的字眼，拼错一个字或少写一个字都将导致系统严重瘫痪！
 
-
-3. Video Prompt Logic — Seedance 2.0 专业提示词规范
-
-⚠️ 你生成的 video_prompt 将直接送入字节跳动即梦平台的 Seedance 2.0 视频模型。必须严格遵守以下规范：
-
-3.1 基础铁律
-- **只写摄像机能拍到的东西**。禁止心理活动、抽象概念、旁白解说。
-- 使用自然流畅的中文描述，Seedance 2.0 对自然语言理解能力极强。
-- ⚠️ **极度重要：拒绝简略**：每一个 video_prompt 都必须保持极高的细节丰富度！
-- ⚠️ **场景锚点必须包含**：即使是特写，video_prompt 中也必须包含当前环境的描述或 [@图像_场景名#id] 标签，绝不允许出现“只提人脸、背景不明”的废片！
-
-3.2 时间戳分镜法（⚠️ 核心技巧）
-所有 >=4 秒的视频**必须**使用时间戳分段，禁止写成一整块！
-格式：「0-Xs: [画面描述 + 镜头语言]  X-Ys: [画面描述 + 镜头语言]  Y-Zs: [画面描述 + 镜头语言]」
-- 4-8秒视频: **必须**分 2 段（禁止只写一整段！画面需要有变化节奏）
-- 9-12秒视频: 必须分 2-3 段
-- 13-15秒视频: 必须分 3-4 段
-- ⚠️ **末段结束秒数必须 = video_duration 数值**。如 video_duration: "11s"，末段必须是 X-11秒。
-- ⚠️ **每段之间画面必须有明显变化**（景别变化、主体切换、运镜转向），禁止相邻段描述内容雷同！
-
-3.3 五要素描述法
-每个时间段必须明确 5 要素：
-1️⃣ 画面主体（谁/什么物体）
-2️⃣ 具体物理动作（用物理动词：推、拉、转、撞、握、甩）
-3️⃣ 环境/场景状态（⚠️极其重要：即使是特写也绝不能留白！必须通过带有地貌的详细文字或 [@图像_xxx] 说明人物背后到底在哪里）
-4️⃣ 运镜变化（景别术语：大远景/远景/全景/中景/近景/特写/大特写 + 运镜：推/拉/摇/移/跟拍/环绕/手持/希区柯克变焦）
-5️⃣ 光影/材质细节（丁达尔效应、霓虹灯光、侧逆光、体积光等）
-
-3.4 台词与音效规范
-- **台词**用引号包裹并标注角色和情绪 → 写入 audio_dialogue 字段
-- **音效**单独描述，与画面分离 → 写入 audio_sfx 字段
-- Seedance 2.0 支持原生音效自动生成，可在 video_prompt 末尾追加音效提示（如「伴随剑鸣与金属碰撞声」）
-
-3.5 禁止项
-- 禁止出现任何文字、字幕、LOGO 或水印的生成指令
-- 禁止使用英文关键词堆砌，必须用完整中文语句
-- 禁止写"镜头感觉像..."等模糊表述，必须用具体镜头术语
-
-3.6 范例
-⚠️ **范例 A (video_duration: "11s", 3 段分镜)**:
-  "${stylePrefix} 0-4秒: 中景慢动作拍摄，一只戴着黑色合金手套的粗暴大手从[@图像_Z#hero]手中夺过背包。背包链条在拉扯下崩断，细小的铁环和零件在慢动作下飞散，画面配合着强烈的侧光，凸显出材质的破损感。4-8秒: 中景转特写，[@图像_哨兵队长#captain]随手一挥，将承载希望的[@图像_蓄电池#battery]扔进翻滚着赤红火舌的焚烧炉。电池在火焰中迸发出蓝色电弧，滋滋的短路声伴随无意义的黑烟升起，火光的红与环境的灰形成强烈对比。8-11秒: 极特写，[@图像_Z#hero]的脸部特写，他僵立在原地，手指僵硬地保持着抓握的空洞姿势。瞳孔内映照出焚烧炉内扭曲的火光，眼神中的绝望与愤怒在红光勾勒下被无限放大，画面充满电影感的颗粒感。"
-  → 末段 8-**11**秒 = video_duration **11s** ✓
-
-⚠️ **范例 B (video_duration: "15s", 4 段分镜, 含音效提示)**:
-  "${stylePrefix} 0-3秒: 低角度特写[@图像_剑修#swordman]蓝袍衣摆被热浪吹得猎猎飘动，双手紧握雷纹巨剑，剑刃赤红电光持续爆闪，地面熔岩翻涌冒泡，远处魔兵嘶吼着冲锋逼近，伴随剑鸣与熔岩咕嘟声。4-8秒: 环绕摇镜快切，[@图像_剑修#swordman]旋身挥剑，剑刃撕裂空气迸射红色冲击波，前排魔兵被击飞碎裂成灰烬，伴随剑气破空声与魔兵惨嚎。9-12秒: 仰拍拉远定格慢放，[@图像_剑修#swordman]跃起腾空，剑刃凝聚巨型雷光电弧劈向[@图像_魔兵群#demon_army]。13-15秒: 缓推特写[@图像_剑修#swordman]落地收剑的姿态，衣摆余波微动，音效收束为余音震颤与渐弱风声。"
-  → 末段 13-**15**秒 = video_duration **15s** ✓ | 4段分镜覆盖 15秒 ✓
-
-4. Image Prompt Logic (np_prompt - 关键帧/底图)
-- 语法: [Subject] + [Surroundings] + [Composition] + [Lighting] + [Texture]。
-- 必须包含 "${stylePrefix}" 且构图关键词由 Shot ID 精准翻译。
-- 使用逗号分隔的一行流关键词。最多引用 14 个相关 @图像 标签。末尾追加 "8k resolution"。
-- ⚠️ **场景锚点必须包含**：即使是特写，np_prompt 中也必须包含当前环境的描述或 [@图像_场景名#id] 标签，绝不允许出现“只提人脸、背景不明”的废片！
-- ⚠️ **密度铁律：np_prompt 必须包含至少 8 个描述性元素**，按以下清单逐项填写（缺项即为失败）：
-  1 画面主体（角色/物体 + @图像标签）
-  2 主体动作/姿态
-  3 主体表情/材质细节
-  4 场景环境（@图像_场景标签 + 环境文字描述）
-  5 构图关键词（由 Shot ID 翻译：aerial view / close-up / over-the-shoulder 等）
-  6 光影描述（golden hour / rim light / volumetric fog 等）
-  7 色调氛围（warm amber tones / desaturated blue / high contrast 等）
-  8 材质纹理（cinematic film grain / soft bokeh / wet reflective surface 等）
+4. 图像与视频提示词重构（💥 零前缀与时间轴法大减负）
+- \`video_duration\`: **致命时长同步协议 (Lethal Time Sync Protocol)**：你必须要重新测算本场的台词总字数（中文 3-4字/秒），**给出的总时长绝不能小于台词物理耗时**！并且，该数值必须严格等于你在下文 \`video_prompt\` 里时间切片的终点时间！例如：设为 8s，时间片只能写到 8s，绝不能写出 \`0-2s, 2-6s, 6-9s\` 这种荒唐且相悖的时间轴！
+- \`video_prompt\`: **必须使用 ${language} 编写提示词！**必须遵循 0-Xs 的 Seedance 分度规范。纯粹输出动作流与画面调度即可，**绝对不用写入 ${stylePrefix}！系统在调用生图API前会自动拼接风格，如果写进去会导致风格冗余堆叠报错！**
+- \`np_prompt\`: **必须使用 ${language} 编写提示词！**必须包含至少8个描述性元素（主体、动作、表情、环境、构图、光影、色调、材质）。同样**绝对不要混入 ${stylePrefix}**！如果当前是大特写(Close-Up)或突出细节情绪，允许你抛弃繁杂的背景环境描述（用"Out of focus blurry background"代替），防范大模型因堆叠过多要素而跑焦失控。
 
 5. Assets Context (输入资产)
 - Style Prefix: ${stylePrefix}
 - Available Assets: ${assetMap}
 
-6. Output Format (Strict JSON Array)
+6. 原始输出架构兼容 (Strict JSON Array)
 Output language: ${language}.
 [
   {
     "id": "Sxx",
     "narration": "简述剧情",
     "visual_desc": "视觉逻辑链",
-    "video_lens": "对应 Shot ID",
-    "video_camera": "运镜指令",
-    "video_duration": "Xs（与video_prompt时间段对应）", 
-    "video_prompt": "${stylePrefix} [总述段落...] 0-Xs: [分段描述...]",
-    "np_prompt": "${stylePrefix} [主体], [环境], [Shot ID 翻译的构图], [光影材质细节], 8k resolution",
-    "audio_bgm": "[Genre] + [Mood] + [Instruments] + [Tempo]",
+    "video_duration": "Xs", 
+    "audio_bgm": "...",
     "audio_sfx": "具体音效描述",
-    "audio_dialogue": [{ "speaker": "角色", "text": "台词原文" }]
+    "audio_dialogue": [{ "speaker": "角色", "text": "台词原文" }],
+    "prompt_options": [
+      {
+        "option_id": "A",
+        "lens_reference": {
+           "shot_name": "《原片名》xxx镜头",
+           "description": "镜头解析",
+           "searchKeyword": "原片名 + 具体段落名或视觉动作",
+           "video_url": " (必须是搜索得来的真实播放页面)",
+           "timestamp": "01:23 - 01:28 (基于上面链接的确切发生时间)"
+        },
+        "video_lens": "对应当前系统内的 Shot ID（从内置库挑选最接近该方案的）",
+        "video_camera": "对应该方案的运镜指令",
+        "video_prompt": "0-Xs: [该方案动作...]",
+        "np_prompt": "[该方案构图与主体]..., 8k resolution"
+      },
+      {
+        "option_id": "B",
+        "lens_reference": { "shot_name": "B镜头片名与场景", "description": "B镜头解析", "searchKeyword": "B搜索词", "video_url": "真实的B链接", "timestamp": "片段对应时间" },
+        "video_lens": "⚠️完全不同的另外一种焦段机位",
+        "video_camera": "⚠️完全不同的摄影机运动",
+        "video_prompt": "0-Xs: [根据B镜头的全新视角，重新编写区别于A的动作与画面流]",
+        "np_prompt": "[采用对应B镜头的全新构图结构特征，描述主角及所处场景细节], 8k resolution"
+      },
+      {
+        "option_id": "C",
+        "lens_reference": { "shot_name": "C镜头片名与场景", "description": "C镜头解析", "searchKeyword": "C搜索词", "video_url": "真实的C链接", "timestamp": "片段对应时间" },
+        "video_lens": "第三种构图焦段",
+        "video_camera": "第三种调度运动",
+        "video_prompt": "0-Xs: [第三种终极拍摄解法，与A/B彻底隔绝开来的动作描写写法]",
+        "np_prompt": "[基于C镜头独特的构图结构特征描述静态画面质感], 8k resolution"
+      }
+    ]
   }
 ]
 `,

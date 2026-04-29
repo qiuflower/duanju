@@ -5,18 +5,48 @@ import { retryWithBackoff, safeJsonParse, wait, Type, ai } from "../helpers";
 import { MODELS } from "../model-manager";
 import { MasterBeatSheet } from "./types";
 import { ASSET_TAG_REGEX, resolveTagToAsset, injectTagIds, isStoryboardTag } from "../../../shared/asset-tags";
+export const textuallyInjectTags = (text: string, sortedAssets: Asset[]) => {
+    if (!text) return text;
+    let newText = text;
+    
+    // [特权处理]: 先无条件捕获所有的“分镜Sxx”或“分镜E1_Sxx”，强制穿上视觉参照标签
+    newText = newText.replace(/(?<!\[@图像_)(分镜(?:E\d+_)?S\d+)/g, '[@图像_$1]');
+
+    for (const asset of sortedAssets) {
+        // 仅针对两字以上的中文名称，或者纯英文字母代号（如 Z、K）进行替换
+        if (asset.name.length >= 2 || /^[a-zA-Z0-9]+$/.test(asset.name)) {
+            let escapedName = asset.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            escapedName = escapedName
+                .replace(/\\\(/g, '__PAREN_START__')
+                .replace(/\\\)/g, '__PAREN_END__')
+                .replace(/（/g, '__PAREN_START__')
+                .replace(/）/g, '__PAREN_END__')
+                .replace(/__PAREN_START__/g, '[\\(（]')
+                .replace(/__PAREN_END__/g, '[\\)）]');
+            
+            const regexPattern = /^[a-zA-Z0-9]+$/.test(asset.name) 
+                ? `(?<![a-zA-Z0-9_])${escapedName}(?![a-zA-Z0-9_])`
+                : `(?<!@图像_)(?<!\\[@图像_)${escapedName}`;
+                
+            const regex = new RegExp(regexPattern, 'g');
+            newText = newText.replace(regex, `[@图像_${asset.name}#${asset.id}]`);
+        }
+    }
+    return newText;
+};
 
 // --- AGENT 3: ASSET PRODUCER ---
 
-export const runAgent3_AssetProduction = async (
+export const runAgent3_AssetProductionStream = async function* (
     beatSheet: MasterBeatSheet,
     language: string,
     assets: Asset[],
     stylePrefix: string,
     aspectRatio: string = '16:9',
     onProgress?: (msg: string) => void
-): Promise<Scene[]> => {
-    const assetMap = assets.map(a => `[@图像_${a.name}#${a.id}] → DNA: ${a.visualDna || ''}, Desc: ${a.description}`).join('\n');
+): AsyncGenerator<Scene[], void, unknown> {
+    // 核心修改：让 Agent 3 彻底放弃标签格式，只看纯名字，彻底消除大模型格式幻觉，也避免与 Agent 4 的标签化发生套娃覆盖。
+    const assetMap = assets.map(a => `- ${a.name} → DNA: ${a.visualDna || ''}, Desc: ${a.description}`).join('\n');
 
     const usedShotIds = [...new Set((beatSheet.beats || []).map(b => b.shot_id).filter(Boolean))] as string[];
     const filteredLensLibrary = toDetailedLensLibrary(usedShotIds);
@@ -24,10 +54,10 @@ export const runAgent3_AssetProduction = async (
     const sysPrompt = PROMPTS.AGENT_3_ASSET_PRODUCER(filteredLensLibrary, language, stylePrefix, assetMap, aspectRatio);
 
     const allBeats = beatSheet.beats || [];
-    if (allBeats.length === 0) return [];
+    if (allBeats.length === 0) return;
 
-    // 动态批处理：按 beat 数量自适应分批，每批最多 MAX_BEATS_PER_BATCH 个
-    const MAX_BEATS_PER_BATCH = 10;
+    // 动态批处理：为防止 3 个选项输出极其庞大导致的 LLM 复制粘贴“偷懒现象”，强制单流单次处理。
+    const MAX_BEATS_PER_BATCH = 1;
     const totalBeats = allBeats.length;
     const batchCount = Math.max(1, Math.ceil(totalBeats / MAX_BEATS_PER_BATCH));
     const batchSize = Math.ceil(totalBeats / batchCount);
@@ -58,8 +88,30 @@ export const runAgent3_AssetProduction = async (
                             video_camera: { type: Type.STRING },
                             video_lens: { type: Type.STRING },
                             video_vfx: { type: Type.STRING },
-                            np_prompt: { type: Type.STRING },
-                            video_prompt: { type: Type.STRING },
+                            prompt_options: {
+                                type: Type.ARRAY,
+                                items: {
+                                    type: Type.OBJECT,
+                                    properties: {
+                                        option_id: { type: Type.STRING },
+                                        lens_reference: {
+                                            type: Type.OBJECT,
+                                            properties: {
+                                                shot_name: { type: Type.STRING },
+                                                description: { type: Type.STRING },
+                                                searchKeyword: { type: Type.STRING },
+                                                video_url: { type: Type.STRING },
+                                                timestamp: { type: Type.STRING }
+                                            },
+                                            required: ["shot_name", "description"]
+                                        },
+                                        video_lens: { type: Type.STRING },
+                                        video_camera: { type: Type.STRING },
+                                        video_prompt: { type: Type.STRING },
+                                        np_prompt: { type: Type.STRING }
+                                    }
+                                }
+                            },
                             audio_dialogue: {
                                 type: Type.ARRAY,
                                 items: {
@@ -75,7 +127,7 @@ export const runAgent3_AssetProduction = async (
                             audio_bgm: { type: Type.STRING },
                             assetIds: { type: Type.ARRAY, items: { type: Type.STRING } }
                         },
-                        required: ["id", "narration", "visual_desc", "np_prompt", "assetIds"]
+                        required: ["id", "narration", "visual_desc", "video_duration", "audio_dialogue", "prompt_options"]
                     }
                 }
             },
@@ -112,8 +164,8 @@ export const runAgent3_AssetProduction = async (
                 if (Array.isArray(parsed) && parsed.length > 0) {
                     if (parsed[0].scenes) {
                         batchScenes = parsed[0].scenes;
-                    } else if (parsed.some((item: any) => item.id !== undefined && item.np_prompt !== undefined)) {
-                        batchScenes = parsed.filter((item: any) => item.id !== undefined && item.np_prompt !== undefined);
+                    } else if (parsed.some((item: any) => item.id !== undefined && (item.np_prompt !== undefined || item.prompt_options !== undefined))) {
+                        batchScenes = parsed.filter((item: any) => item.id !== undefined && (item.np_prompt !== undefined || item.prompt_options !== undefined));
                     } else {
                         batchScenes = parsed;
                     }
@@ -126,7 +178,18 @@ export const runAgent3_AssetProduction = async (
                 }
 
                 const validatedScenes = batchScenes.map(scene => {
+                    // Fallback injection for backwards compatibility
+                    if (scene.prompt_options && scene.prompt_options.length > 0) {
+                        scene.np_prompt = scene.prompt_options[0].np_prompt;
+                        scene.video_prompt = scene.prompt_options[0].video_prompt;
+                        scene.video_lens = scene.prompt_options[0].video_lens;
+                        scene.video_camera = scene.prompt_options[0].video_camera;
+                    }
+
                     let np = scene.np_prompt || "";
+                    if (!np || np === "..." || np.trim().length < 5) {
+                        np = (scene.video_prompt || "").replace(/\s*\d+-\d+s:\s*/g, ' ').trim();
+                    }
                     if (!np.includes(`--ar ${aspectRatio} --v 6.0`)) {
                         np = np.replace(/--ar\s+\S+/g, '').trim();
                         np = `${np} --ar ${aspectRatio} --v 6.0`;
@@ -137,8 +200,8 @@ export const runAgent3_AssetProduction = async (
                     const matchedIds = new Set<string>();
 
                     for (const m of tagMatches) {
-                        const tagName = m[1];
-                        const anchoredId = m[2];
+                        const tagName = m[1] || m[3];
+                        const anchoredId = m[2] || m[4];
                         if (isStoryboardTag(tagName)) continue;
 
                         const resolved = resolveTagToAsset(
@@ -157,15 +220,77 @@ export const runAgent3_AssetProduction = async (
 
                     const videoPrompt = injectTagIds(scene.video_prompt || '', assets);
                     const npPrompt = injectTagIds(np, assets);
+                    
+                    // Also inject into the prompt_options array so frontend options have valid tags
+                    if (scene.prompt_options) {
+                        for (const opt of scene.prompt_options) {
+                            opt.video_prompt = injectTagIds(opt.video_prompt || '', assets);
+                            
+                            let optNp = opt.np_prompt || "";
+                            if (!optNp || optNp === "..." || optNp.trim().length < 5) {
+                                optNp = (opt.video_prompt || "").replace(/\s*\d+-\d+s:\s*/g, ' ').trim();
+                            }
+                            if (!optNp.includes(`--ar ${aspectRatio} --v 6.0`)) {
+                                optNp = optNp.replace(/--ar\s+\S+/g, '').trim();
+                                optNp = `${optNp} --ar ${aspectRatio} --v 6.0`;
+                            }
+                            opt.np_prompt = injectTagIds(optNp, assets);
+                        }
+                    }
 
-                    return { ...scene, video_prompt: videoPrompt, np_prompt: npPrompt, assetIds: [...matchedIds] };
+                    return { ...scene, np_prompt: npPrompt, video_prompt: videoPrompt, assetIds: [...matchedIds] };
                 });
 
-                allScenes.push(...validatedScenes);
+                let finalizedBatch: Scene[] = validatedScenes;
 
-                if (validatedScenes.length > 0) {
-                    const lastScene = validatedScenes[validatedScenes.length - 1];
-                    // 结构化上下文：含运镜、音效，提升跨批次连贯性
+                if (finalizedBatch.length > 0 && assets.length > 0) {
+                    try {
+                        if (onProgress) onProgress('Asset Matching: Semantic review...');
+                        finalizedBatch = await semanticAssetMatch(finalizedBatch, assets);
+                    } catch (e: any) {
+                        console.warn('[Agent3] Semantic asset match failed chunk:', e?.message || e);
+                    }
+
+                    finalizedBatch = finalizedBatch.map(scene => {
+                        const activeIds = scene.assetIds || [];
+                        if (activeIds.length === 0) return scene;
+
+                        const activeAssets = activeIds.map(id => assets.find(a => a.id === id)).filter(Boolean) as Asset[];
+                        const sortedAssets = [...activeAssets].sort((a, b) => b.name.length - a.name.length);
+
+                        const textuallyInjectTagsLocal = (text: string) => textuallyInjectTags(text, sortedAssets);
+
+                        const replaceInPromptOptions = (options: any[]) => {
+                            if (!options) return options;
+                            return options.map(opt => ({
+                                ...opt,
+                                video_prompt: textuallyInjectTagsLocal(opt.video_prompt),
+                                np_prompt: textuallyInjectTagsLocal(opt.np_prompt),
+                            }));
+                        };
+
+                        const updatedOptions = replaceInPromptOptions(scene.prompt_options || []);
+                        return {
+                            ...scene,
+                            video_prompt: textuallyInjectTagsLocal(scene.video_prompt || ''),
+                            np_prompt: textuallyInjectTagsLocal(scene.np_prompt || ''),
+                            prompt_options: updatedOptions.length > 0 ? updatedOptions : undefined,
+                            visual_desc: textuallyInjectTagsLocal(scene.visual_desc || '')
+                        };
+                    });
+
+                    try {
+                        if (onProgress) onProgress('Asset Matching: Smart Semantic Tag Injection...');
+                        finalizedBatch = await llmTagInjector(finalizedBatch, assets);
+                    } catch (e: any) {
+                        console.warn('[Agent4] LLM Tag Injector failed chunk:', e?.message || e);
+                    }
+                }
+
+                allScenes.push(...finalizedBatch);
+
+                if (finalizedBatch.length > 0) {
+                    const lastScene = finalizedBatch[finalizedBatch.length - 1];
                     prevBatchEndContext = [
                         lastScene.visual_desc || '',
                         `video_prompt 尾段: ${(lastScene.video_prompt || '').slice(-200)}`,
@@ -175,6 +300,9 @@ export const runAgent3_AssetProduction = async (
                 }
 
                 batchSuccess = true;
+                
+                // 【推流核心】：单个镜头生成且打完标签后，立刻作为 Stream Chunk yield 给上游
+                yield finalizedBatch;
                 break;
             } catch (batchError: any) {
                 console.error(`[Agent3][Batch ${i + 1}/${batchCount}][Retry ${attempt}/${MAX_BATCH_RETRIES}] failed (beats ${start}-${end}):`, batchError?.message || batchError);
@@ -188,27 +316,136 @@ export const runAgent3_AssetProduction = async (
             const msg = `[Agent3][Batch ${i + 1}/${batchCount}] beats ${start}-${end} failed after ${MAX_BATCH_RETRIES} retries.`;
             console.error(msg);
             if (onProgress) {
-                onProgress(`⚠ Batch ${i + 1}/${batchCount} failed after ${MAX_BATCH_RETRIES} retries.`);
+                onProgress(`⚠ Batch ${i + 1}/${batchCount} failed after ${MAX_BATCH_RETRIES} retries. Skipping batch and continuing...`);
             }
-            throw new Error(msg);
+            
+            // Yield error placeholders for this batch
+            const errorScenes: Scene[] = batchBeats.map((beat: any) => ({
+                id: beat.beat_id || `err_${Date.now()}_${Math.random()}`,
+                narration: beat.visual_action || "未生成画面",
+                visual_desc: `[${beat.shot_name || beat.shot_id || 'Unknown'}] ${beat.visual_action || "未生成画面"}`,
+                video_prompt: "",
+                np_prompt: "",
+                status: "failed",
+                error: "AI 模型响应超时或格式错误"
+            }));
+            
+            yield errorScenes;
+            continue;
         }
     }
 
-    // ── LLM 二次审查：语义匹配资产 ──
-    // 纯字符串匹配无法解决"车厢内" ≈ "中巴车内部"这类语义同义问题
-    // 用一次轻量 LLM 调用进行语义级别的资产-场景匹配
-    if (allScenes.length > 0 && assets.length > 0) {
-        try {
-            if (onProgress) onProgress('Asset Matching: Semantic review...');
-            const enrichedScenes = await semanticAssetMatch(allScenes, assets);
-            allScenes = enrichedScenes;
-        } catch (e: any) {
-            console.warn('[Agent3] Semantic asset match failed (non-fatal, keeping regex results):', e?.message || e);
-        }
-    }
+};
 
+/**
+ * 兼容性同步包装器（供直接调用老接口的代码使用）
+ * 内部消费完整的 Stream 并返回 `Promise<Scene[]>`
+ */
+export const runAgent3_AssetProduction = async (
+    beatSheet: MasterBeatSheet,
+    language: string,
+    assets: Asset[],
+    stylePrefix: string,
+    aspectRatio: string = '16:9',
+    onProgress?: (msg: string) => void
+): Promise<Scene[]> => {
+    let allScenes: Scene[] = [];
+    for await (const chunk of runAgent3_AssetProductionStream(beatSheet, language, assets, stylePrefix, aspectRatio, onProgress)) {
+        allScenes.push(...chunk);
+    }
     return allScenes;
 };
+
+/**
+ * Agent 4: Smart LLM Tag Injector
+ * 并发处理所有场景的提示词选项，利用上下文真正理解名字含义并强制注入标签语法。
+ */
+export async function llmTagInjector(scenes: Scene[], assets: Asset[]): Promise<Scene[]> {
+    return Promise.all(scenes.map(async scene => {
+        const activeIds = scene.assetIds || [];
+        if (activeIds.length === 0 || !scene.prompt_options || scene.prompt_options.length === 0) return scene;
+
+        const activeAssets = activeIds.map(id => assets.find(a => a.id === id)).filter(Boolean) as Asset[];
+        if (activeAssets.length === 0) return scene;
+
+        const targetCatalog = activeAssets.map(a => `- ${a.name} (请将其替换为 [@图像_${a.name}#${a.id}])`).join('\n');
+
+        const inputPayload = JSON.stringify(scene.prompt_options.map(opt => ({
+            option_id: opt.option_id,
+            video_prompt: opt.video_prompt,
+            np_prompt: opt.np_prompt
+        })), null, 2);
+
+        const schema = {
+            type: Type.OBJECT,
+            properties: {
+                options: {
+                    type: Type.ARRAY,
+                    items: {
+                        type: Type.OBJECT,
+                        properties: {
+                            option_id: { type: Type.STRING },
+                            video_prompt: { type: Type.STRING },
+                            np_prompt: { type: Type.STRING }
+                        },
+                        required: ["option_id", "video_prompt", "np_prompt"]
+                    }
+                }
+            },
+            required: ["options"]
+        };
+
+        try {
+            const response = await retryWithBackoff<GenerateContentResponse>(() => ai.models.generateContent({
+                model: MODELS.TEXT_FAST,
+                contents: {
+                    parts: [{
+                        text: `您是一个专业的文本格式修饰器。请将下方 JSON 数据里的 video_prompt 和 np_prompt 字段进行语义标签包裹。
+                        
+【目标资产大名单与格式要求】
+${targetCatalog}
+
+【最高权限规则】
+1. 仔细阅读原文本意，找出所有真正指代上述目标资产的词（无论是全名，还是“他/她”、“那个少年”等明显的代词）。
+2. 将这些词汇直接替换为大名单中要求的 [@图像_名字#ID] 格式。例如如果文案写的是“他转过身”，替换为“[@图像_名字#ID] 转过身”。
+3. 绝对禁止修改、总结、或增加任何与标签无关的内容！必须保持原始机位、打光、动作指令完全一字不差！
+4. 绝不要误杀非指代词汇（例如人物叫“白”，绝不允许修改“大白天”、“白云”里的白）。
+5. 【防套娃保险】：如果文本中已经包含 [@图像_...] 这样的格式，绝对不要对它进行重复替换！(例如不可将 [@图像_Z#id] 变成 [@图像_[@图像_Z... )
+
+输入待处理的架构 JSON 数组：
+${inputPayload}`
+                    }]
+                },
+                config: {
+                    systemInstruction: "你是一个极其精准的语义格式化机器人。仅在确认语境指代目标出场人物/物品时包裹指定的格式化标签。必须返回一个 JSON 对象，其包含一个 `options` 字段，且 `options` 是一个数组，映射所有修改后的原文项。",
+                    responseMimeType: "application/json",
+                    responseSchema: schema
+                }
+            }), 2);
+
+            const parsed = safeJsonParse<{options: any[]}>(response.text, {options: []});
+            if (parsed && Array.isArray(parsed.options) && parsed.options.length === scene.prompt_options.length) {
+                const newOptions = [...scene.prompt_options];
+                for (let i = 0; i < parsed.options.length; i++) {
+                    const opt = parsed.options[i];
+                    const existingIdx = newOptions.findIndex(o => o.option_id === opt.option_id);
+                    if (existingIdx >= 0) {
+                        if (opt.video_prompt && opt.video_prompt.length > 5) {
+                            newOptions[existingIdx].video_prompt = opt.video_prompt;
+                        }
+                        if (opt.np_prompt && opt.np_prompt.length > 5) {
+                            newOptions[existingIdx].np_prompt = opt.np_prompt;
+                        }
+                    }
+                }
+                return { ...scene, prompt_options: newOptions };
+            }
+        } catch(e) {
+            console.error(`[Agent 4] Smart LLM Tag Injector failed for scene ${scene.id}:`, e);
+        }
+        return scene;
+    }));
+}
 
 /**
  * LLM 语义资产匹配器 — 二次审查

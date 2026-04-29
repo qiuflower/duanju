@@ -35,9 +35,11 @@ export class T8StarProvider implements IAIProvider {
 
     private isT8starModel(model?: string) {
         if (!model) return false;
+        if (model.includes("image") || model.includes("imagen") || model === "nano-banana-pro") return false;
         return (
-            model === "gemini-3-flash-preview" ||
-            model === "nano-banana-2-2k"
+            model.includes("gemini") ||
+            model.includes("nano-banana") ||
+            model === "gemini-3.1-flash-lite-preview-thinking-high"
         );
     }
 
@@ -378,28 +380,61 @@ export class T8StarProvider implements IAIProvider {
             }
 
             prompt = prompt.trim();
-            const imageSize = "2K";
+            let imageSize = "2K";
             let aspectRatio = "16:9";
-            
+
             if (config?.imageConfig?.aspectRatio) {
                 aspectRatio = config.imageConfig.aspectRatio;
             } else if (config?.imageConfig?.aspect_ratio) {
                 aspectRatio = config.imageConfig.aspect_ratio;
             }
+            
+            if (config?.imageConfig?.overrideNanoAspectRatio) {
+               aspectRatio = config.imageConfig.overrideNanoAspectRatio;
+            }
+            if (config?.imageConfig?.overrideNanoSize) {
+               imageSize = config.imageConfig.overrideNanoSize;
+            }
+
+            if (model.includes("gpt-image")) {
+                if (aspectRatio === "9:16" || aspectRatio === "3:4" || aspectRatio === "2:3") {
+                    aspectRatio = "2:3";
+                } else if (aspectRatio === "1:1") {
+                    aspectRatio = "1:1";
+                } else {
+                    aspectRatio = "3:2";
+                }
+            }
+
+            let apiKey = this.imageApiKey;
+            if (config?.imageConfig?.useOfficialKey) {
+                apiKey = "sk-vMpkhSBqFQQy3yT8shKIJCgCptW6uWdPXWpAzbofWRnYOlTa";
+            }
 
             const imageBody: any = {
-                model: "nano-banana-pro",
+                model: model,
                 prompt: prompt,
                 response_format: "b64_json",
-                image_size: imageSize,
-                aspect_ratio: aspectRatio
             };
+
+            if (config?.imageConfig?.useOfficialKey) {
+                 if (config.imageConfig.size) {
+                    imageBody.size = config.imageConfig.size;
+                 }
+                 if (config.imageConfig.quality) {
+                    imageBody.quality = config.imageConfig.quality;
+                 }
+            } else {
+                // 原有的专门给非官方版本或者资产图使用的格式
+                imageBody.image_size = imageSize;
+                imageBody.aspect_ratio = aspectRatio;
+            }
 
             if (refImages.length > 0) {
                 imageBody.image = refImages;
             }
 
-            const imageData = await this.postJson(this.mediaBaseUrl, "/v1/images/generations", imageBody, this.imageApiKey);
+            const imageData = await this.postJson(this.mediaBaseUrl, "/v1/images/generations", imageBody, apiKey);
             
             let b64 = imageData?.b64_json || imageData?.data?.[0]?.b64_json || imageData?.image?.b64_json || imageData?.output?.b64_json;
             if (b64) {

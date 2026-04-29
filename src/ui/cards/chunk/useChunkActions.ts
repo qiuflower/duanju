@@ -13,14 +13,14 @@ export interface UseChunkActionsProps {
     styleState: GlobalStyle;
     language: string;
     isActive: boolean;
-    onUpdateChunk: (id: string, updates: Partial<NovelChunk>) => void;
-    onSceneUpdate: (chunkId: string, sceneId: string, updates: Partial<Scene>) => void;
+    onUpdateChunk: (id: string, updates: Partial<NovelChunk> | ((c: NovelChunk) => Partial<NovelChunk>)) => void;
+    onSceneUpdate: (chunkId: string, sceneId: string, updates: Partial<Scene> | ((prevScene: Scene) => Partial<Scene>)) => void;
     onDuplicateScene: (chunkId: string, sceneId: string) => void;
     onExtract: (chunk: NovelChunk) => Promise<Asset[]>;
     onGenerateScript: (chunk: NovelChunk) => Promise<Scene[]>;
     onGenerateBeats: (chunk: NovelChunk) => Promise<Scene[]>;
     onGeneratePrompts: (chunk: NovelChunk) => Promise<Scene[]>;
-    onGenerateImage: (scene: Scene, chunkAssets?: Asset[]) => Promise<string>;
+    onGenerateImage: (scene: Scene, chunkAssets?: Asset[], optionId?: string, allScenes?: Scene[]) => Promise<string>;
     onToggle: () => void;
 }
 
@@ -36,8 +36,14 @@ export function useChunkActions({
     const [showTextModal, setShowTextModal] = useState(false);
     const [editingText, setEditingText] = useState('');
 
-    // Per-scene asset readiness: checks only assets referenced by a scene's np_prompt
+    // Chunk-level check for header warning only (not blocking)
+    const anyAssetPending = chunk.assets.length > 0 && chunk.assets.some(a => !a.refImageUrl && !a.refImageAssetId);
+
+    // Per-scene asset readiness
     const getSceneAssetsReady = (scene: Scene): boolean => {
+        // ENFORCE: All chunk assets must be generated before any scene image can be generated
+        if (anyAssetPending) return false;
+
         // No prompt generated yet → not ready
         if (!scene.np_prompt?.trim()) return false;
         if (chunk.assets.length === 0) return true;
@@ -54,12 +60,14 @@ export function useChunkActions({
         return referencedAssets.every(a => !!a.refImageUrl || !!a.refImageAssetId);
     };
 
-    // Chunk-level check for header warning only (not blocking)
-    const anyAssetPending = chunk.assets.length > 0 && chunk.assets.some(a => !a.refImageUrl && !a.refImageAssetId);
 
-    // Per-scene VIDEO asset readiness: checks video_prompt @图像 tags
+
+    // Per-scene VIDEO asset readiness
     const MAX_VIDEO_REFS = 3;
     const getVideoAssetsReady = (scene: Scene): boolean => {
+        // ENFORCE: All chunk assets must be generated before any scene video can be generated
+        if (anyAssetPending) return false;
+
         // No video prompt generated yet → not ready
         if (!scene.video_prompt?.trim()) return false;
         const tags = extractAssetTags(scene.video_prompt || '');
@@ -72,9 +80,27 @@ export function useChunkActions({
         for (const tag of tags) {
             if (isStoryboardTag(tag.name)) {
                 // 分镜标签 → check corresponding scene's imageUrl
-                const idPart = tag.name.replace('分镜', '');
+                let idPart = tag.name.replace('分镜', '');
+                let optionSuffix: string | undefined;
+                
+                const suffixMatch = idPart.match(/-([a-zA-Z0-9]+)$/);
+                if (suffixMatch) {
+                    optionSuffix = suffixMatch[1];
+                    idPart = idPart.substring(0, idPart.length - suffixMatch[0].length);
+                }
+
                 const target = chunk.scenes.find(s => s.id === idPart || s.id.endsWith(`_${idPart}`));
-                if (target && !target.imageUrl && !target.imageAssetId) return false;
+                
+                if (target) {
+                    if (optionSuffix && target.prompt_options) {
+                        const opt = target.prompt_options.find(o => o.option_id === optionSuffix || o.option_id === optionSuffix.toUpperCase());
+                        if (opt && !opt.imageUrl && !opt.imageAssetId) return false;
+                    } else if (!target.imageUrl && !target.imageAssetId) {
+                        return false;
+                    }
+                } else {
+                    return false; // Target scene not found
+                }
             } else {
                 // 资产标签 → check chunk.assets refImageUrl
                 const asset = resolveTagToAsset(tag, chunk.assets);
@@ -153,8 +179,9 @@ export function useChunkActions({
     };
 
     const handleDeleteScene = (sceneId: string) => {
-        const newScenes = chunk.scenes.filter(s => s.id !== sceneId);
-        onUpdateChunk(chunk.id, { scenes: newScenes });
+        onUpdateChunk(chunk.id, (prev) => ({
+            scenes: prev.scenes.filter(s => s.id !== sceneId)
+        }));
     };
 
     const handleDuplicateScene = (sceneId: string) => {
@@ -165,8 +192,13 @@ export function useChunkActions({
         if (chunk.status === 'shooting' && generatingSceneIds.length > 0) return;
 
         const allScenesWithPrompt = chunk.scenes.filter(s => !!s.np_prompt?.trim());
-        const scenesWithoutImage = allScenesWithPrompt.filter(s => !s.imageUrl && !s.imageAssetId);
-        const scenesWithImage = allScenesWithPrompt.filter(s => !!s.imageUrl || !!s.imageAssetId);
+        const scenesWithoutImage = allScenesWithPrompt.filter(s => {
+            // Scene needs image if main image is missing AND any prompt option image is missing
+            const mainMissing = !s.imageUrl && !s.imageAssetId;
+            const optionsMissing = s.prompt_options ? s.prompt_options.some(opt => !opt.imageUrl && !opt.imageAssetId) : false;
+            return mainMissing || optionsMissing;
+        });
+        const scenesWithImage = allScenesWithPrompt.filter(s => !scenesWithoutImage.includes(s));
 
         let scenesToProcess: Scene[];
 
@@ -199,18 +231,60 @@ export function useChunkActions({
         const processScene = async (scene: Scene) => {
             setGeneratingSceneIds(prev => [...prev, scene.id]);
             try {
-                const url = await onGenerateImage(scene, chunk.assets);
-                // Merge imageUrl + videoAssetIds into one update to avoid cascade re-renders
-                const updates: Partial<Scene> = { imageUrl: url };
-                if (scene.isStartEndFrameMode) {
-                    updates.startEndAssetIds = [`scene_img_${scene.id}`];
-                } else if (scene.videoAssetIds === undefined) {
-                    const currentSceneImgId = `scene_img_${scene.id}`;
-                    const availableAssets = chunk.assets.filter(a => (scene.assetIds || []).includes(a.id));
-                    const matched = matchAssetsToPrompt(scene.visual_desc || '', availableAssets, scene.assetIds || []);
-                    updates.videoAssetIds = [currentSceneImgId, ...matched.slice(0, 2).map(a => a.id)];
+                // If the scene has prompt_options, we should batch generate all missing options
+                if (scene.prompt_options && scene.prompt_options.length > 0) {
+                    const newOptions = [...scene.prompt_options];
+                    let anyOptionUpdated = false;
+                    let lastGeneratedUrl = scene.imageUrl;
+
+                    await Promise.all(newOptions.map(async (opt, idx) => {
+                        // Only generate if option missing image
+                        if (!opt.imageUrl && !opt.imageAssetId) {
+                            const resultUrl = await onGenerateImage(scene, chunk.assets, opt.option_id, chunk.scenes);
+                            newOptions[idx] = { ...newOptions[idx], imageUrl: resultUrl };
+                            anyOptionUpdated = true;
+                            lastGeneratedUrl = resultUrl;
+                        }
+                    }));
+
+                    if (anyOptionUpdated) {
+                        const updates: Partial<Scene> = { prompt_options: newOptions };
+                        
+                        // Update main scene imageUrl to the currently active option's image
+                        const activeOpt = newOptions.find((o) => o.video_prompt === scene.video_prompt) || newOptions[0];
+                        if (activeOpt.imageUrl) {
+                            updates.imageUrl = activeOpt.imageUrl;
+                        } else if (!scene.imageUrl) {
+                            updates.imageUrl = lastGeneratedUrl;
+                        }
+
+                        if (scene.isStartEndFrameMode) {
+                            const optionId = activeOpt.option_id;
+                            updates.startEndAssetIds = [`scene_img_${scene.id}_${optionId}`];
+                        } else if (scene.videoAssetIds === undefined) {
+                            const optionId = activeOpt.option_id;
+                            const currentSceneImgId = `scene_img_${scene.id}_${optionId}`;
+                            const availableAssets = chunk.assets.filter(a => (scene.assetIds || []).includes(a.id));
+                            const matched = matchAssetsToPrompt(scene.visual_desc || '', availableAssets, scene.assetIds || []);
+                            updates.videoAssetIds = [currentSceneImgId, ...matched.slice(0, 2).map(a => a.id)];
+                        }
+                        onSceneUpdate(chunk.id, scene.id, updates);
+                    }
+                } else {
+                    // Standard single generation fallback
+                    const url = await onGenerateImage(scene, chunk.assets, undefined, chunk.scenes);
+                    // Merge imageUrl + videoAssetIds into one update to avoid cascade re-renders
+                    const updates: Partial<Scene> = { imageUrl: url };
+                    if (scene.isStartEndFrameMode) {
+                        updates.startEndAssetIds = [`scene_img_${scene.id}`];
+                    } else if (scene.videoAssetIds === undefined) {
+                        const currentSceneImgId = `scene_img_${scene.id}`;
+                        const availableAssets = chunk.assets.filter(a => (scene.assetIds || []).includes(a.id));
+                        const matched = matchAssetsToPrompt(scene.visual_desc || '', availableAssets, scene.assetIds || []);
+                        updates.videoAssetIds = [currentSceneImgId, ...matched.slice(0, 2).map(a => a.id)];
+                    }
+                    onSceneUpdate(chunk.id, scene.id, updates);
                 }
-                onSceneUpdate(chunk.id, scene.id, updates);
             } catch (e) {
                 console.error(`Failed to gen image for scene ${scene.id}`, e);
             } finally {
@@ -289,7 +363,7 @@ export function useChunkActions({
             for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
                 try {
                     // Step 1: Submit (returns immediately)
-                    const { operation } = await generateVideo(imageToUse, scene, styleState.aspectRatio, (scene.useAssets !== false) ? chunk.assets : [], undefined, chunk.scenes);
+                    const { operation } = await generateVideo(imageToUse, scene, styleState.aspectRatio, (scene.useAssets !== false) ? chunk.assets : [], styleState, chunk.scenes);
                     // Step 2: Poll until done
                     const { url } = await pollVideoUntilDone(operation);
 
@@ -333,43 +407,74 @@ export function useChunkActions({
         }
     };
 
-    const handleSceneUpdateWrapper = (sceneId: string, field: keyof Scene, value: any) => {
-        onSceneUpdate(chunk.id, sceneId, { [field]: value });
+    const handleSceneUpdateWrapper = (sceneId: string, fieldOrUpdates: keyof Scene | Partial<Scene>, value?: any) => {
+        if (typeof fieldOrUpdates === 'string') {
+            onSceneUpdate(chunk.id, sceneId, { [fieldOrUpdates]: value });
+        } else {
+            onSceneUpdate(chunk.id, sceneId, fieldOrUpdates);
+        }
     };
 
-    const handleImageGenerated = (sceneId: string, url: string) => {
-        const scene = chunk.scenes.find(s => s.id === sceneId);
-        // Merge imageUrl + videoAssetIds into one update to avoid cascade re-renders
-        const updates: Partial<Scene> = { imageUrl: url };
-        if (scene) {
-            if (scene.isStartEndFrameMode) {
+    const handleImageGenerated = (sceneId: string, url: string, imageAssetId?: string, optionId?: string) => {
+        onSceneUpdate(chunk.id, sceneId, (prevScene) => {
+            // Merge imageUrl + videoAssetIds into one update to avoid cascade re-renders
+            const updates: Partial<Scene> = { imageUrl: url, imageAssetId: imageAssetId };
+            
+            // Synchronize into prompt_options if this was a refresh for a specific option
+            if (optionId && prevScene.prompt_options) {
+                const newOptions = [...prevScene.prompt_options];
+                const optIdx = newOptions.findIndex(o => o.option_id === optionId);
+                if (optIdx !== -1) {
+                    newOptions[optIdx] = { ...newOptions[optIdx], imageUrl: url };
+                    updates.prompt_options = newOptions;
+                }
+            }
+            
+            if (prevScene.isStartEndFrameMode) {
                 updates.startEndAssetIds = [`scene_img_${sceneId}`];
-            } else if (scene.videoAssetIds === undefined) {
+            } else if (prevScene.videoAssetIds === undefined) {
                 const currentSceneImgId = `scene_img_${sceneId}`;
-                const availableAssets = chunk.assets.filter(a => (scene.assetIds || []).includes(a.id));
-                const matched = matchAssetsToPrompt(scene.visual_desc || '', availableAssets, scene.assetIds || []);
+                const availableAssets = chunk.assets.filter(a => (prevScene.assetIds || []).includes(a.id));
+                const matched = matchAssetsToPrompt(prevScene.visual_desc || '', availableAssets, prevScene.assetIds || []);
                 updates.videoAssetIds = [currentSceneImgId, ...matched.slice(0, 2).map(a => a.id)];
             }
-        }
-        onSceneUpdate(chunk.id, sceneId, updates);
+            
+            return updates;
+        });
     };
 
-    const handleGenerateImageInternal = async (scene: Scene) => {
-        setGeneratingSceneIds(prev => [...prev, scene.id]);
-        try {
-            return await onGenerateImage(scene, chunk.assets);
-        } finally {
-            setGeneratingSceneIds(prev => prev.filter(id => id !== scene.id));
-        }
+    const handleGenerateImageInternal = async (scene: Scene, optionId?: string) => {
+        return await onGenerateImage(scene, chunk.assets, optionId, chunk.scenes);
     };
 
-    const handleVideoGenerated = (sceneId: string, url: string, assetId?: string) => {
-        const scene = chunk.scenes.find(s => s.id === sceneId);
-        if (scene?.isStartEndFrameMode) {
-            onSceneUpdate(chunk.id, sceneId, { startEndVideoUrl: url, startEndVideoAssetId: assetId });
-        } else {
-            onSceneUpdate(chunk.id, sceneId, { videoUrl: url, videoAssetId: assetId });
-        }
+    const handleVideoGenerated = (sceneId: string, url: string, assetId?: string, optionId?: string) => {
+        onSceneUpdate(chunk.id, sceneId, (prevScene) => {
+            const updates: Partial<Scene> = {};
+
+            if (prevScene.isStartEndFrameMode) {
+                updates.startEndVideoUrl = url;
+                updates.startEndVideoAssetId = assetId;
+            } else {
+                updates.videoUrl = url;
+                updates.videoAssetId = assetId;
+            }
+
+            // Synchronize into prompt_options if this was a refresh for a specific option
+            if (optionId && prevScene.prompt_options) {
+                const newOptions = [...prevScene.prompt_options];
+                const optIdx = newOptions.findIndex(o => o.option_id === optionId);
+                if (optIdx !== -1) {
+                    newOptions[optIdx] = { 
+                        ...newOptions[optIdx], 
+                        videoUrl: url,
+                        ...(assetId ? { videoAssetId: assetId } : {})
+                    };
+                    updates.prompt_options = newOptions;
+                }
+            }
+
+            return updates;
+        });
     };
 
     const handleDownload = async () => {

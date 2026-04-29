@@ -12,9 +12,9 @@ router.get('/', (req: Request, res: Response) => {
 // POST /api/config
 router.post('/', (req: Request, res: Response) => {
     try {
-        const { textmodel, imagemodel, videomodel } = req.body;
+        const { textmodel, imagemodel, videomodel, t8starImageModel, t8starImageSize, t8starImageQuality, t8starNanoImageSize, t8starNanoAspectRatio } = req.body;
         const mm = getModelManager();
-        mm.setConfig({ textmodel, imagemodel, videomodel });
+        mm.setConfig({ textmodel, imagemodel, videomodel, t8starImageModel, t8starImageSize, t8starImageQuality, t8starNanoImageSize, t8starNanoAspectRatio });
         res.json(mm.getConfig());
     } catch (e: any) {
         console.error('[Config]', e);
