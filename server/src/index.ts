@@ -147,7 +147,7 @@ app.get('*', (req, res) => {
     }
 });
 
-const server = app.listen(PORT, () => {
+app.listen(PORT, () => {
     console.log(`Server is running on http://localhost:${PORT}`);
     console.log('Business Logic API routes:');
     console.log('  POST /api/pipeline/analyze');
@@ -166,9 +166,3 @@ const server = app.listen(PORT, () => {
     console.log('  GET/POST /api/config');
 
 });
-
-// Increase server timeouts for long-running AI tasks (e.g., image generation)
-// 10 minutes = 600,000 ms
-server.setTimeout(600000);
-server.keepAliveTimeout = 600000;
-server.headersTimeout = 601000;
