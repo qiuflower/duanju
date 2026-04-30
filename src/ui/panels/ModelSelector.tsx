@@ -127,8 +127,7 @@ export const ModelSelector: React.FC = () => {
                               onChange={(e) => handleUpdateString('t8starImageModel', e.target.value)}
                               className="w-full bg-[#0D0F12] text-slate-200 text-xs rounded-lg px-3 py-2.5 border border-white/5 focus:border-[#7B8BFF] outline-none appearance-none font-medium cursor-pointer"
                             >
-                              <option value="nano-banana-pro">nano-banana-pro (Default)</option>
-                              <option value="gemini-3.1-flash-image-preview">gemini-3.1-flash-image-preview</option>
+                              <option value="nano-banana-pro">nano-banana-pro</option>
                               <option value="gpt-image-2">gpt-image-2</option>
                               <option value="gpt-image-2-official">gpt-image-2 (官方版)</option>
                             </select>
@@ -137,7 +136,7 @@ export const ModelSelector: React.FC = () => {
                         </div>
 
                         {/* T8star Optional Official Size & Quality Settings */}
-                        {config.t8starImageModel === 'gpt-image-2-official' && (
+                        {(config.t8starImageModel === 'gpt-image-2-official' || config.t8starImageModel === 'gpt-image-2') && (
                           <>
                             {/* Size Option */}
                             <div>
@@ -146,14 +145,14 @@ export const ModelSelector: React.FC = () => {
                                   <Maximize size={15} />
                                 </div>
                                 <div>
-                                  <div className="text-[13px] font-semibold text-slate-200 leading-tight mb-0.5">官方高级尺寸 (Size)</div>
+                                  <div className="text-[13px] font-semibold text-slate-200 leading-tight mb-0.5">高级尺寸 (Size)</div>
                                   <div className="text-[10px] text-slate-500 leading-tight">设置图像输出的尺寸</div>
                                 </div>
                               </div>
 
                               <div className="relative mb-3">
                                 <select
-                                  value={(!['auto', '1024x1024', '1024x1536', '1536x1024', '2048x2048', '2048x1152'].includes(config.t8starImageSize || 'auto')) ? 'custom' : (config.t8starImageSize || 'auto')}
+                                  value={(!['auto', '1024x1024', '1024x1536', '1536x1024', '2048x2048', '2048x1152', '3840x2160', '2160x3840'].includes(config.t8starImageSize || 'auto')) ? 'custom' : (config.t8starImageSize || 'auto')}
                                   onChange={(e) => {
                                     if (e.target.value === 'custom') {
                                       handleUpdateString('t8starImageSize', '2560x1440');
@@ -163,19 +162,21 @@ export const ModelSelector: React.FC = () => {
                                   }}
                                   className="w-full bg-[#0D0F12] text-slate-200 text-xs rounded-lg px-3 py-2.5 border border-white/5 focus:border-[#7B8BFF] outline-none appearance-none font-medium cursor-pointer"
                                 >
-                                  <option value="auto">Auto (默认匹配比例)</option>
-                                  <option value="1024x1024">1024x1024 (正方形)</option>
-                                  <option value="1024x1536">1024x1536 (竖向)</option>
-                                  <option value="1536x1024">1536x1024 (横向)</option>
-                                  <option value="2048x2048">2048x2048 (高清 2K)</option>
-                                  <option value="2048x1152">2048x1152 (横幅 2K)</option>
-                                  <option value="custom">Custom (自定义输入)</option>
+                                  <option value="auto">Auto (默认)</option>
+                                  <option value="1024x1024">1024x1024 (1:1)</option>
+                                  <option value="1024x1536">1024x1536 (2:3)</option>
+                                  <option value="1536x1024">1536x1024 (3:2)</option>
+                                  <option value="2048x2048">2048x2048 (1:1 2K)</option>
+                                  <option value="2048x1152">2048x1152 (16:9 2K)</option>
+                                  <option value="3840x2160">3840x2160 (16:9 4K)</option>
+                                  <option value="2160x3840">2160x3840 (9:16 4K)</option>
+                                  <option value="custom">Custom (自定义)</option>
                                 </select>
                                 <ChevronDown className="absolute right-3 top-3 text-slate-500 pointer-events-none" size={14} />
                               </div>
 
                               {/* Custom Input boxes */}
-                              {(!['auto', '1024x1024', '1024x1536', '1536x1024', '2048x2048', '2048x1152'].includes(config.t8starImageSize || 'auto')) && (
+                              {(!['auto', '1024x1024', '1024x1536', '1536x1024', '2048x2048', '2048x1152', '3840x2160', '2160x3840'].includes(config.t8starImageSize || 'auto')) && (
                                 (() => {
                                   const currentCustomSize = config.t8starImageSize || '';
                                   const match = currentCustomSize.match(/^(\d+)x(\d+)$/i);
@@ -268,7 +269,7 @@ export const ModelSelector: React.FC = () => {
                         )}
 
                         {/* Nano/Gemini Settings */}
-                        {(config.t8starImageModel === 'nano-banana-pro' || config.t8starImageModel === 'gemini-3.1-flash-image-preview') && (
+                        {(config.t8starImageModel === 'nano-banana-pro') && (
                           <>
                             {/* Nano Size Option */}
                             <div>

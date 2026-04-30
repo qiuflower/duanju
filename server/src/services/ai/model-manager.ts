@@ -124,7 +124,12 @@ class ModelManager {
                         newConfig.imageConfig.size = this.config.t8starImageSize || "auto";
                         newConfig.imageConfig.quality = this.config.t8starImageQuality || "auto";
                     }
-                } else if (requestedModel === "nano-banana-pro" || requestedModel === "gemini-3.1-flash-image-preview") {
+                } else if (requestedModel === "gpt-image-2") {
+                    if (!isAsset) {
+                        newConfig.imageConfig.size = this.config.t8starImageSize || "auto";
+                        newConfig.imageConfig.quality = this.config.t8starImageQuality || "auto";
+                    }
+                } else if (requestedModel === "nano-banana-pro") {
                     if (!isAsset) {
                         newConfig.imageConfig.overrideNanoSize = this.config.t8starNanoImageSize || "2K";
                         newConfig.imageConfig.overrideNanoAspectRatio = this.config.t8starNanoAspectRatio || "16:9";

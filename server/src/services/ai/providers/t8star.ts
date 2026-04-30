@@ -433,15 +433,6 @@ export class T8StarProvider implements IAIProvider {
                imageSize = config.imageConfig.overrideNanoSize;
             }
 
-            if (model.includes("gpt-image")) {
-                if (aspectRatio === "9:16" || aspectRatio === "3:4" || aspectRatio === "2:3") {
-                    aspectRatio = "2:3";
-                } else if (aspectRatio === "1:1") {
-                    aspectRatio = "1:1";
-                } else {
-                    aspectRatio = "3:2";
-                }
-            }
 
             let apiKey = this.imageApiKey;
             if (config?.imageConfig?.useOfficialKey) {
@@ -454,7 +445,7 @@ export class T8StarProvider implements IAIProvider {
                 response_format: "url",
             };
 
-            if (config?.imageConfig?.useOfficialKey) {
+            if (config?.imageConfig?.useOfficialKey || (model === "gpt-image-2" && config?.imageConfig?.size)) {
                  if (config.imageConfig.size) {
                     imageBody.size = config.imageConfig.size;
                  }

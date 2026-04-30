@@ -117,7 +117,16 @@ const AssetLibrary: React.FC<AssetLibraryProps> = ({
             return;
         }
 
-        const missing = assets.filter(a => !a.refImageUrl && !a.refImageAssetId && a.description);
+        const missing = assets.filter(a => {
+            if (a.refImageUrl || a.refImageAssetId || !a.description) return false;
+            if (a.parentId) {
+                const parent = assets.find(p => p.id === a.parentId);
+                if (parent && !parent.refImageUrl && !parent.refImageAssetId) {
+                    return false;
+                }
+            }
+            return true;
+        });
         if (missing.length === 0) {
             if (onBatchComplete && !stopBatchRef.current) {
                 onBatchComplete();
